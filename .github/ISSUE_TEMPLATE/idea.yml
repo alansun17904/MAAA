@@ -1,0 +1,20 @@
+name: Idea
+description: Propose a new idea or method. 
+title: "[IDEA] <idea>"
+labels: [blocked, discussion, idea]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Provide a brief summary of your idea. What question are you trying to answer?
+  - type: textarea
+    id: method
+    attributes:
+      label: Motivation
+      description: So what? Say your idea completely works out, why should we care?
+  - type: input
+    id: compute
+    attributes:
+      label: Related Work
+      description: How is this problem already being solved? How is your proposed idea different?

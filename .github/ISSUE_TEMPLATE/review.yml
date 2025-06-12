@@ -1,0 +1,15 @@
+name: Literature Review
+description: Review a relevant paper. 
+title: "[IDEA] <brief description>"
+labels: [blocked, literature]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Provide a brief summary of the paper, what are the quetions they are trying to answer? 
+  - type: textarea
+    id: method
+    attributes:
+      label: Relevance
+      description: How is this paper relevant to our project (tag another issue and briefly explain). 

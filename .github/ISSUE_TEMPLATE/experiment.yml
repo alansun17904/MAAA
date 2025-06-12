@@ -1,0 +1,26 @@
+name: Experiment
+description: Planning and tracking an experiment 
+title: "[EXP] <brief description>"
+labels: [blocked, data collection, modeling]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Provide a brief summary of the experiment. What question are you trying to answer?
+  - type: textarea
+    id: method
+    attributes:
+      label: Method
+      description: How will we run the experiment? What datasets, models, hyperparameters are we using?
+  - type: input
+    id: compute
+    attributes:
+      label: Computation
+      description: What sort of computational resources are needed to run this?
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis
+      description: What is the expected result? Given that you get the expected results, so what?
+  

@@ -1,6 +1,6 @@
 name: Literature Review
 description: Review a relevant paper. 
-title: "[IDEA] <brief description>"
+title: "[REVIEW] <brief description>"
 labels: [blocked, literature]
 body:
   - type: textarea

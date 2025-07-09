@@ -24,3 +24,9 @@ body:
       label: Hypothesis
       description: What is the expected result? Given that you get the expected results, so what?
   
+
+  - type: textarea
+    id: accept
+    attributes:
+      label: Acceptance Criteria
+      description: How will we know that this task/issues is completed and valid?

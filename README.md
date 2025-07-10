@@ -18,7 +18,7 @@ Install conda (skip if already installed).
 # Setup Environment
 
 1. Run the following command: `conda env create -f environment.yml`
-2. Run `conda activate EdgeTest`
+2. Run `conda activate MAAA_CD`
 
 
 ## Run Experiments

@@ -100,9 +100,9 @@ dependencies:
     - tensorboard==2.16.2
     - tensorboard-data-server==0.7.2
     - termcolor==3.1.0
-    - tokenizers==0.21.2
+    - tokenizers==0.20.3
     - toolz==1.0.0
-    - torch==2.7.1
+    - torch==2.5.1
     - tqdm==4.67.1
     - transformer-lens==2.15.4
     - transformers==4.45.2

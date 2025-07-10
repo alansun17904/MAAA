@@ -1121,6 +1121,10 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    print(f'MODEL ARGS: {model_args}')
+    print(f'DATA ARGS: {data_args}')
+    print(f'TRAINING ARGS: {training_args}')
+
     if model_args.use_auth_token is not None:
         warnings.warn(
             "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token` instead.",

@@ -1,0 +1,1278 @@
+#!/usr/bin/env python
+# coding=utf-8
+# Copyright 2020 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+""" Finetuning the library models for sequence classification on GLUE."""
+# You can also adapt this script on your own text classification task. Pointers for this are left as comments.
+
+import logging
+import os
+import torch
+import pickle
+import random
+import sys
+import json
+import warnings
+from dataclasses import dataclass, field
+from typing import Optional
+
+import datasets
+import evaluate
+import numpy as np
+from datasets import load_dataset, load_from_disk, Dataset, DatasetDict
+
+import transformers
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    GPT2Config,
+    GPT2Tokenizer,
+    GPT2LMHeadModel,
+    DataCollatorWithPadding,
+    EvalPrediction,
+    HfArgumentParser,
+    PretrainedConfig,
+    Trainer,
+    Seq2SeqTrainer,
+    TrainingArguments,
+    Seq2SeqTrainingArguments,
+    default_data_collator,
+    set_seed,
+    get_linear_schedule_with_warmup,
+)
+from transformers.trainer_utils import get_last_checkpoint
+from transformers.utils import check_min_version, send_example_telemetry
+from transformers.utils.versions import require_version
+
+# MeZO imports
+from transformers.trainer_pt_utils import _get_learning_rate, log_metrics, metrics_format, save_metrics, save_state
+TRAINER_STATE_NAME = "trainer_state.json"
+
+import torch.nn as nn
+from torch.optim import AdamW
+
+import sys
+sys.path.append(
+    os.path.join(
+        os.getcwd(),
+        "src/modeling/"
+    )
+)   # Very hacky but the imports are annoying otherwise
+from modeling_fpt2 import FPT2LMHeadModel
+
+require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
+logger = logging.getLogger(__name__)
+
+class FPT2InfoTrainer(Seq2SeqTrainer):
+    def __init__(self, *args, **kwargs):
+        self.target_edge_sparsity = kwargs.pop('target_edge_sparsity', 0.0)
+        self.start_edge_sparsity = kwargs.pop('start_edge_sparsity', 0.0)
+        self.target_layer_sparsity = kwargs.pop('target_layer_sparsity', 0.0)
+        self.start_layer_sparsity = kwargs.pop('start_layer_sparsity', 0.0)
+        if "num_edge_sparsity_warmup_steps" in kwargs:
+            self.num_edge_sparsity_warmup_steps = kwargs.pop('num_edge_sparsity_warmup_steps')
+        else:
+            self.num_edge_sparsity_warmup_steps = kwargs.pop('num_sparsity_warmup_steps', 0)
+        if "num_layer_sparsity_warmup_steps" in kwargs:
+            self.num_layer_sparsity_warmup_steps = kwargs.pop('num_layer_sparsity_warmup_steps')
+        else:
+            self.num_layer_sparsity_warmup_steps = kwargs.pop('num_sparsity_warmup_steps', self.num_edge_sparsity_warmup_steps)
+        _ = kwargs.pop('num_sparsity_warmup_steps', None)
+        self.warmup_type = kwargs.pop('warmup_type', 'linear')
+        self.gpt2_model = kwargs.pop('gpt2_model', None)
+        self.skip_layer_loss_if_higher_sparsity = kwargs.pop('skip_layer_loss_if_higher_sparsity', False)
+        
+        self.digits = None
+        self.device_count = torch.cuda.device_count()
+                
+        super().__init__(*args, **kwargs)
+        
+        self.tokenizer = kwargs.pop('tokenizer', None)
+
+    def get_current_edge_target_sparsity(self, global_step):
+        if global_step < self.num_edge_sparsity_warmup_steps:
+            if self.warmup_type == 'linear':
+                return (
+                    self.start_edge_sparsity + (self.target_edge_sparsity - self.start_edge_sparsity) * 
+                    global_step / self.num_edge_sparsity_warmup_steps
+                )
+            elif self.warmup_type == 'logarithmic':
+                log_one_minus_sparsity = math.log(1 - self.start_edge_sparsity) + (math.log(1 - self.target_edge_sparsity) - 
+                    math.log(1 - self.start_edge_sparsity)) * global_step / self.num_edge_sparsity_warmup_steps
+                return 1 - math.exp(log_one_minus_sparsity)
+            else:
+                raise ValueError(f'Unknown warmup type: {self.warmup_type}')
+        else:
+            return self.target_edge_sparsity
+        
+    def get_current_layer_target_sparsity(self, global_step):
+        if global_step < self.num_layer_sparsity_warmup_steps:
+            if self.warmup_type == 'linear':
+                return (
+                    self.start_layer_sparsity + (self.target_layer_sparsity - self.start_layer_sparsity) * 
+                    global_step / self.num_layer_sparsity_warmup_steps
+                )
+            elif self.warmup_type == 'logarithmic':
+                log_one_minus_sparsity = math.log(1 - self.start_layer_sparsity) + (math.log(1 - self.target_layer_sparsity) - 
+                    math.log(1 - self.start_layer_sparsity)) * global_step / self.num_layer_sparsity_warmup_steps
+                return 1 - math.exp(log_one_minus_sparsity)
+            else:
+                raise ValueError(f'Unknown warmup type: {self.warmup_type}')
+        else:
+            return self.target_layer_sparsity
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        if self.digits is None:
+            self.digits = torch.LongTensor([self.tokenizer.encode("{:02d}".format(i))[0] for i in range(100)]).to(self.args.device)
+
+        indices = inputs.pop("indices", None)
+        digits_ = inputs.pop("digits", None)
+        corr_input_ids = inputs.pop("corr_input_ids")
+        input_ids = inputs.pop("input_ids")
+        
+        bsz = input_ids.shape[0]
+        
+        with torch.no_grad():
+            # First get the logits from the GPT-2 model
+            gpt2_logits = self.gpt2_model(input_ids=input_ids, **inputs).logits
+            gpt2_logits = torch.gather(
+                gpt2_logits, 
+                1, 
+                indices.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, gpt2_logits.shape[-1])
+            ).squeeze()
+            gpt2_logits = torch.gather(gpt2_logits, 1, self.digits.unsqueeze(0).repeat(gpt2_logits.shape[0], 1))
+            gpt2_logits = torch.nn.functional.log_softmax(gpt2_logits, dim=-1)
+            
+            # Now run the corrupted inputs through it, and retain the activations
+            corr_x = self.gpt2_model(input_ids=corr_input_ids, **inputs, output_writer_states=True).writer_states
+
+            # Reshape corr_x in case we have distributed training
+            tgt_shape = (-1, bsz // self.device_count, *corr_x.shape[2:])
+            corr_x = corr_x.reshape(tgt_shape)
+        
+        outputs = model(
+            input_ids=input_ids,
+            **inputs, 
+            target_edge_sparsity=self.get_current_edge_target_sparsity(self.state.global_step),
+            target_node_sparsity=self.get_current_layer_target_sparsity(self.state.global_step),
+            corr_x=corr_x
+        )
+        
+        reg_edge_loss = outputs["edge_loss"]
+        if self.skip_layer_loss_if_higher_sparsity and outputs["model_node_sparsity"] > outputs["target_node_sparsity"]:
+            reg_layer_loss = 0
+        else:
+            reg_layer_loss = outputs["node_loss"]
+        reg_loss = reg_edge_loss + reg_layer_loss
+        
+        ## Restricting to 01-99 for now
+        # Only the last position
+        logits = torch.gather(outputs.logits, 1, indices.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, outputs.logits.shape[-1])).squeeze()
+        logits = torch.gather(logits, 1, self.digits.unsqueeze(0).repeat(logits.shape[0], 1))
+        logits = torch.nn.functional.log_softmax(logits, dim=-1)
+
+        kl_loss = nn.functional.kl_div(logits, gpt2_logits, reduction="batchmean", log_target=True)
+        
+        loss = kl_loss + reg_loss
+        outputs["loss"] = loss
+        outputs["kl_loss"] = kl_loss
+        outputs["prob_digits"] = torch.nn.functional.softmax(logits, dim=-1)
+        outputs["digits"] = digits_
+
+        return (loss, outputs) if return_outputs else loss
+    
+
+    # MAAA
+
+    
+
+
+    # Copied from MeZO - https://github.com/princeton-nlp/MeZO/blob/main/large_models/trainer.py
+    def _inner_training_loop(
+        self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
+    ):
+        """
+        We overload the original training loop to add linear probing and MeZO. Search key word "MeZO added"
+        for those updates.
+        """
+        self._train_batch_size = batch_size
+        # Data loader and number of training steps
+        train_dataloader = self.get_train_dataloader()
+
+        # MeZO added: Linear probing
+        if self.args.linear_probing:
+
+            def _get_token_prediction_layer(model):
+                if model.config.model_type == "opt":
+                    return model.lm_head
+                else:
+                    raise NotImplementedError(model.config.model_type)
+
+            def _extract_features(model, *args, **kwargs):
+                """some magic for getting features pre last layer"""
+                features = {}
+                def __hook(model_, input_, output_):
+                    features["features"] = input_[0].detach()
+
+                _get_token_prediction_layer(model).register_forward_hook(__hook)
+                model.forward(*args, **kwargs)
+                return features["features"]
+
+            logger.info("Linear probing")
+            logger.info("Starting to get features for training dataset")
+            targets = []
+            features = []
+            with torch.inference_mode():
+                for step, inputs in enumerate(tqdm(train_dataloader)):
+                    for k, v in inputs.items():
+                        if isinstance(v, torch.Tensor):
+                            inputs[k] = v.to(self.model.device)
+                        
+                    feature = _extract_features(self.model, **inputs)
+                    target = inputs["labels"]
+
+                    # Shift the target (bc it's autoregressive LM) and add the corresponding part
+                    assert not self.args.train_as_classification and self.args.only_train_option
+                    feature, target = feature[:, :-1], target[:, 1:]
+                    for _i, _len in enumerate(inputs["option_len"]):
+                        features.append(feature[_i, -_len:])
+                        targets.append(target[_i, -_len:])
+
+            logger.info("Finished getting features for training dataset")
+
+            features = torch.cat(features, dim=0).cpu().numpy()
+            targets = torch.cat(targets, dim=0).cpu().numpy()
+            # Whether to use bias
+            if self.model.config.model_type in ["opt", "gpt2"]:
+                use_bias = False
+            else:
+                raise NotImplementedError
+            # Set early stopping
+            tol = 0.01 if self.args.lp_early_stopping else 1e-4 # 1e-4 is scipy default
+            max_iter = 1000 if self.args.lp_early_stopping else 5000
+
+            logger.info("Fitting logistic regression...")
+            reg = LogisticRegressionCV(max_iter=max_iter, fit_intercept=use_bias, multi_class="multinomial", random_state=0, tol=tol, n_jobs=-1).fit(features, targets)
+            logger.info("Done")
+
+            logger.info("Assigning weights to model")
+            decoder = _get_token_prediction_layer(self.model)
+            coef_torch = torch.tensor(reg.coef_, device=decoder.weight.device, dtype=decoder.weight.dtype)
+            if use_bias:
+                bias_torch = torch.tensor(reg.intercept_, device=decoder.weight.device, dtype=decoder.weight.dtype)
+            if coef_torch.shape[0] == 1: # The regressor only detects two classes
+                assert len(reg.classes_) == 2
+                coef_torch = torch.cat([-coef_torch / 2, coef_torch / 2], dim=0)
+                if use_bias:
+                    bias_torch = torch.cat([-bias_torch / 2, bias_torch / 2], dim=0)
+
+            for _i, token_id in enumerate(reg.classes_):
+                decoder.weight.data[token_id] = coef_torch[_i]
+                if use_bias:
+                    decoder.bias.data[token_id] = bias_torch[_i]
+
+            return None
+
+        # Setting up training control variables:
+        # number of training epochs: num_train_epochs
+        # number of training steps per epoch: num_update_steps_per_epoch
+        # total number of training steps to execute: max_steps
+        total_train_batch_size = args.train_batch_size * args.gradient_accumulation_steps * args.world_size
+
+        len_dataloader = None
+        if has_length(train_dataloader):
+            len_dataloader = len(train_dataloader)
+            num_update_steps_per_epoch = len_dataloader // args.gradient_accumulation_steps
+            num_update_steps_per_epoch = max(num_update_steps_per_epoch, 1)
+            num_examples = self.num_examples(train_dataloader)
+            if args.max_steps > 0:
+                max_steps = args.max_steps
+                num_train_epochs = args.max_steps // num_update_steps_per_epoch + int(
+                    args.max_steps % num_update_steps_per_epoch > 0
+                )
+                # May be slightly incorrect if the last batch in the training dataloader has a smaller size but it's
+                # the best we can do.
+                num_train_samples = args.max_steps * total_train_batch_size
+            else:
+                max_steps = math.ceil(args.num_train_epochs * num_update_steps_per_epoch)
+                num_train_epochs = math.ceil(args.num_train_epochs)
+                num_train_samples = self.num_examples(train_dataloader) * args.num_train_epochs
+        elif args.max_steps > 0:  # Rely on max_steps when dataloader does not have a working size
+            max_steps = args.max_steps
+            # Setting a very large number of epochs so we go as many times as necessary over the iterator.
+            num_train_epochs = sys.maxsize
+            num_update_steps_per_epoch = max_steps
+            num_examples = total_train_batch_size * args.max_steps
+            num_train_samples = args.max_steps * total_train_batch_size
+        else:
+            raise ValueError(
+                "args.max_steps must be set to a positive value if dataloader does not have a length, was"
+                f" {args.max_steps}"
+            )
+
+        if DebugOption.UNDERFLOW_OVERFLOW in self.args.debug:
+            if self.args.n_gpu > 1:
+                # nn.DataParallel(model) replicates the model, creating new variables and module
+                # references registered here no longer work on other gpus, breaking the module
+                raise ValueError(
+                    "Currently --debug underflow_overflow is not supported under DP. Please use DDP"
+                    " (torch.distributed.launch)."
+                )
+            else:
+                debug_overflow = DebugUnderflowOverflow(self.model)  # noqa
+
+        delay_optimizer_creation = (
+            self.sharded_ddp is not None
+            and self.sharded_ddp != ShardedDDPOption.SIMPLE
+            or is_sagemaker_mp_enabled()
+            or self.fsdp is not None
+        )
+        if args.deepspeed:
+            deepspeed_engine, optimizer, lr_scheduler = deepspeed_init(
+                self, num_training_steps=max_steps, resume_from_checkpoint=resume_from_checkpoint
+            )
+            self.model = deepspeed_engine.module
+            self.model_wrapped = deepspeed_engine
+            self.deepspeed = deepspeed_engine
+            self.optimizer = optimizer
+            self.lr_scheduler = lr_scheduler
+        elif not delay_optimizer_creation:
+            self.create_optimizer_and_scheduler(num_training_steps=max_steps)
+
+        self.state = TrainerState()
+        self.state.is_hyper_param_search = trial is not None
+
+        # Activate gradient checkpointing if needed
+        if args.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+
+        model = self._wrap_model(self.model_wrapped)
+
+        if is_sagemaker_mp_enabled() and resume_from_checkpoint is not None:
+            self._load_from_checkpoint(resume_from_checkpoint, model)
+
+        # for the rest of this function `model` is the outside model, whether it was wrapped or not
+        if model is not self.model:
+            self.model_wrapped = model
+
+        if delay_optimizer_creation:
+            self.create_optimizer_and_scheduler(num_training_steps=max_steps)
+
+        # Check if saved optimizer or scheduler states exist
+        self._load_optimizer_and_scheduler(resume_from_checkpoint)
+
+        # important: at this point:
+        # self.model         is the Transformers Model
+        # self.model_wrapped is DDP(Transformers Model), Deepspeed(Transformers Model), etc.
+
+        # Train!
+        logger.info("***** Running training *****")
+        logger.info(f"  Num examples = {num_examples}")
+        logger.info(f"  Num Epochs = {num_train_epochs}")
+        logger.info(f"  Instantaneous batch size per device = {args.per_device_train_batch_size}")
+        logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_train_batch_size}")
+        logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
+        logger.info(f"  Total optimization steps = {max_steps}")
+        logger.info(
+            f"  Number of trainable parameters = {sum(p.numel() for p in model.parameters() if p.requires_grad)}"
+        )
+
+        self.state.epoch = 0
+        start_time = time.time()
+        epochs_trained = 0
+        steps_trained_in_current_epoch = 0
+        steps_trained_progress_bar = None
+
+        # Check if continuing training from a checkpoint
+        if resume_from_checkpoint is not None and os.path.isfile(
+            os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)
+        ):
+            self.state = TrainerState.load_from_json(os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME))
+            epochs_trained = self.state.global_step // num_update_steps_per_epoch
+            if not args.ignore_data_skip:
+                steps_trained_in_current_epoch = self.state.global_step % (num_update_steps_per_epoch)
+                steps_trained_in_current_epoch *= args.gradient_accumulation_steps
+            else:
+                steps_trained_in_current_epoch = 0
+
+            logger.info("  Continuing training from checkpoint, will skip to saved global_step")
+            logger.info(f"  Continuing training from epoch {epochs_trained}")
+            logger.info(f"  Continuing training from global step {self.state.global_step}")
+            if not args.ignore_data_skip:
+                logger.info(
+                    f"  Will skip the first {epochs_trained} epochs then the first {steps_trained_in_current_epoch} "
+                    "batches in the first epoch. If this takes a lot of time, you can add the `--ignore_data_skip` "
+                    "flag to your launch command, but you will resume the training on data already seen by your model."
+                )
+                if self.is_local_process_zero() and not args.disable_tqdm:
+                    steps_trained_progress_bar = tqdm(total=steps_trained_in_current_epoch)
+                    steps_trained_progress_bar.set_description("Skipping the first batches")
+
+        # Update the references
+        self.callback_handler.model = self.model
+        self.callback_handler.optimizer = self.optimizer
+        self.callback_handler.lr_scheduler = self.lr_scheduler
+        self.callback_handler.train_dataloader = train_dataloader
+        if self.hp_name is not None and self._trial is not None:
+            # use self._trial because the SigOpt/Optuna hpo only call `_hp_search_setup(trial)` instead of passing trial
+            # parameter to Train when using DDP.
+            self.state.trial_name = self.hp_name(self._trial)
+        if trial is not None:
+            assignments = trial.assignments if self.hp_search_backend == HPSearchBackend.SIGOPT else trial
+            self.state.trial_params = hp_params(assignments)
+        else:
+            self.state.trial_params = None
+        # This should be the same if the state has been saved but in case the training arguments changed, it's safer
+        # to set this after the load.
+        self.state.max_steps = max_steps
+        self.state.num_train_epochs = num_train_epochs
+        self.state.is_local_process_zero = self.is_local_process_zero()
+        self.state.is_world_process_zero = self.is_world_process_zero()
+
+        # tr_loss is a tensor to avoid synchronization of TPUs through .item()
+        tr_loss = torch.tensor(0.0).to(args.device)
+        # _total_loss_scalar is updated everytime .item() has to be called on tr_loss and stores the sum of all losses
+        self._total_loss_scalar = 0.0
+        self._globalstep_last_logged = self.state.global_step
+        model.zero_grad()
+
+        self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
+
+        # Skip the first epochs_trained epochs to get the random state of the dataloader at the right point.
+        if not args.ignore_data_skip:
+            for epoch in range(epochs_trained):
+                is_random_sampler = hasattr(train_dataloader, "sampler") and isinstance(
+                    train_dataloader.sampler, RandomSampler
+                )
+                if is_torch_less_than_1_11 or not is_random_sampler:
+                    # We just need to begin an iteration to create the randomization of the sampler.
+                    # That was before PyTorch 1.11 however...
+                    for _ in train_dataloader:
+                        break
+                else:
+                    # Otherwise we need to call the whooooole sampler cause there is some random operation added
+                    # AT THE VERY END!
+                    _ = list(train_dataloader.sampler)
+
+        for epoch in range(epochs_trained, num_train_epochs):
+            if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
+                train_dataloader.sampler.set_epoch(epoch)
+            elif hasattr(train_dataloader, "dataset") and isinstance(train_dataloader.dataset, IterableDatasetShard):
+                train_dataloader.dataset.set_epoch(epoch)
+
+            if is_torch_tpu_available():
+                parallel_loader = pl.ParallelLoader(train_dataloader, [args.device]).per_device_loader(args.device)
+                epoch_iterator = parallel_loader
+            else:
+                epoch_iterator = train_dataloader
+
+            # Reset the past mems state at the beginning of each epoch if necessary.
+            if args.past_index >= 0:
+                self._past = None
+
+            steps_in_epoch = (
+                len(epoch_iterator)
+                if len_dataloader is not None
+                else args.max_steps * args.gradient_accumulation_steps
+            )
+            self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
+
+            if epoch == epochs_trained and resume_from_checkpoint is not None and steps_trained_in_current_epoch == 0:
+                self._load_rng_state(resume_from_checkpoint)
+
+            step = -1
+            for step, inputs in enumerate(epoch_iterator):
+
+                # Skip past any already trained steps if resuming training
+                if steps_trained_in_current_epoch > 0:
+                    steps_trained_in_current_epoch -= 1
+                    if steps_trained_progress_bar is not None:
+                        steps_trained_progress_bar.update(1)
+                    if steps_trained_in_current_epoch == 0:
+                        self._load_rng_state(resume_from_checkpoint)
+                    continue
+                elif steps_trained_progress_bar is not None:
+                    steps_trained_progress_bar.close()
+                    steps_trained_progress_bar = None
+
+                if step % args.gradient_accumulation_steps == 0:
+                    self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
+
+                # MeZO added: estimate gradient
+                if args.trainer == "zo":
+                    tr_loss_step = self.zo_step(model, inputs)
+                else:
+                    if (
+                        ((step + 1) % args.gradient_accumulation_steps != 0)
+                        and args.local_rank != -1
+                        and args._no_sync_in_gradient_accumulation
+                    ):
+                        # Avoid unnecessary DDP synchronization since there will be no backward pass on this example.
+                        with model.no_sync():
+                            tr_loss_step = self.training_step(model, inputs)
+                    else:
+                        tr_loss_step = self.training_step(model, inputs)
+
+                if (
+                    args.logging_nan_inf_filter
+                    and not is_torch_tpu_available()
+                    and (torch.isnan(tr_loss_step) or torch.isinf(tr_loss_step))
+                ):
+                    # if loss is nan or inf simply add the average of previous logged losses
+                    tr_loss += tr_loss / (1 + self.state.global_step - self._globalstep_last_logged)
+                else:
+                    tr_loss += tr_loss_step
+
+                self.current_flos += float(self.floating_point_ops(inputs))
+
+                # Optimizer step for deepspeed must be called on every step regardless of the value of gradient_accumulation_steps
+                if self.deepspeed:
+                    self.deepspeed.step()
+
+                if (step + 1) % args.gradient_accumulation_steps == 0 or (
+                    # last step in epoch but step is always smaller than gradient_accumulation_steps
+                    steps_in_epoch <= args.gradient_accumulation_steps
+                    and (step + 1) == steps_in_epoch
+                ):
+                    # MeZO added: update model with the estimated gradient
+                    if args.trainer == "zo":
+                        self.zo_update(model)
+                    else:
+                        # Gradient clipping
+                        if args.max_grad_norm is not None and args.max_grad_norm > 0 and not self.deepspeed:
+                            # deepspeed does its own clipping
+
+                            if self.do_grad_scaling:
+                                # Reduce gradients first for XLA
+                                if is_torch_tpu_available():
+                                    gradients = xm._fetch_gradients(self.optimizer)
+                                    xm.all_reduce("sum", gradients, scale=1.0 / xm.xrt_world_size())
+                                # AMP: gradients need unscaling
+                                self.scaler.unscale_(self.optimizer)
+
+                            if is_sagemaker_mp_enabled() and args.fp16:
+                                self.optimizer.clip_master_grads(args.max_grad_norm)
+                            elif hasattr(self.optimizer, "clip_grad_norm"):
+                                # Some optimizers (like the sharded optimizer) have a specific way to do gradient clipping
+                                self.optimizer.clip_grad_norm(args.max_grad_norm)
+                            elif hasattr(model, "clip_grad_norm_"):
+                                # Some models (like FullyShardedDDP) have a specific way to do gradient clipping
+                                model.clip_grad_norm_(args.max_grad_norm)
+                            else:
+                                # Revert to normal clipping otherwise, handling Apex or full precision
+                                nn.utils.clip_grad_norm_(
+                                    amp.master_params(self.optimizer) if self.use_apex else model.parameters(),
+                                    args.max_grad_norm,
+                                )
+
+                        # Optimizer step
+                        optimizer_was_run = True
+                        if self.deepspeed:
+                            pass  # called outside the loop
+                        elif is_torch_tpu_available():
+                            if self.do_grad_scaling:
+                                self.scaler.step(self.optimizer)
+                                self.scaler.update()
+                            else:
+                                xm.optimizer_step(self.optimizer)
+                        elif self.do_grad_scaling:
+                            scale_before = self.scaler.get_scale()
+                            self.scaler.step(self.optimizer)
+                            self.scaler.update()
+                            scale_after = self.scaler.get_scale()
+                            optimizer_was_run = scale_before <= scale_after
+                        else:
+                            self.optimizer.step()
+
+                        if optimizer_was_run and not self.deepspeed:
+                            self.lr_scheduler.step()
+                        model.zero_grad()
+
+                    self.state.global_step += 1
+                    self.state.epoch = epoch + (step + 1) / steps_in_epoch
+                    self.control = self.callback_handler.on_step_end(args, self.state, self.control)
+
+                    self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+                else:
+                    self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
+
+                if self.control.should_epoch_stop or self.control.should_training_stop:
+                    break
+            if step < 0:
+                logger.warning(
+                    "There seems to be not a single sample in your epoch_iterator, stopping training at step"
+                    f" {self.state.global_step}! This is expected if you're using an IterableDataset and set"
+                    f" num_steps ({max_steps}) higher than the number of available samples."
+                )
+                self.control.should_training_stop = True
+
+            self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
+            self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+
+            if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
+                if is_torch_tpu_available():
+                    # tpu-comment: Logging debug metrics for PyTorch/XLA (compile, execute times, ops, etc.)
+                    xm.master_print(met.metrics_report())
+                else:
+                    logger.warning(
+                        "You enabled PyTorch/XLA debug metrics but you don't have a TPU "
+                        "configured. Check your training configuration if this is unexpected."
+                    )
+            if self.control.should_training_stop:
+                break
+
+        if args.past_index and hasattr(self, "_past"):
+            # Clean the state at the end of training
+            delattr(self, "_past")
+
+        logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
+        if args.load_best_model_at_end and self.state.best_model_checkpoint is not None:
+            # Wait for everyone to get here so we are sur the model has been saved by process 0.
+            if is_torch_tpu_available():
+                xm.rendezvous("load_best_model_at_end")
+            elif args.local_rank != -1:
+                dist.barrier()
+            elif is_sagemaker_mp_enabled():
+                smp.barrier()
+
+            self._load_best_model()
+
+        # add remaining tr_loss
+        self._total_loss_scalar += tr_loss.item()
+        train_loss = self._total_loss_scalar / self.state.global_step
+
+        metrics = speed_metrics("train", start_time, num_samples=num_train_samples, num_steps=self.state.max_steps)
+        self.store_flos()
+        metrics["total_flos"] = self.state.total_flos
+        metrics["train_loss"] = train_loss
+
+        self.is_in_train = False
+
+        self._memory_tracker.stop_and_update_metrics(metrics)
+
+        self.log(metrics)
+
+        run_dir = self._get_output_dir(trial)
+        checkpoints_sorted = self._sorted_checkpoints(use_mtime=False, output_dir=run_dir)
+
+        # Delete the last checkpoint when save_total_limit=1 if it's different from the best checkpoint.
+        if self.state.best_model_checkpoint is not None and self.args.save_total_limit == 1:
+            for checkpoint in checkpoints_sorted:
+                if checkpoint != self.state.best_model_checkpoint:
+                    logger.info(f"Deleting older checkpoint [{checkpoint}] due to args.save_total_limit")
+                    shutil.rmtree(checkpoint)
+
+        self.control = self.callback_handler.on_train_end(args, self.state, self.control)
+
+        return TrainOutput(self.state.global_step, train_loss, metrics)
+    
+    ############## MeZO EXTRA Stuff##############
+
+
+    def zo_perturb_parameters(self, random_seed=None, scaling_factor=1):
+        """
+        Perturb the parameters with random vector z.
+        Input: 
+        - random_seed: random seed for MeZO in-place perturbation (if it's None, we will use self.zo_random_seed)
+        - scaling_factor: theta = theta + scaling_factor * z * eps
+        """
+
+        # Set the random seed to ensure that we sample the same z for perturbation/update
+        torch.manual_seed(random_seed if random_seed is not None else self.zo_random_seed)
+        
+        for name, param in self.named_parameters_to_optim:
+            z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
+            param.data = param.data + scaling_factor * z * self.args.zo_eps
+
+
+    def zo_forward(self, model, inputs):
+        """
+        Get (no gradient) loss from the model. Dropout is turned off too.
+        """
+        model.eval()
+        if self.args.non_diff:
+            # Non-differentiable objective (may require autoregressive generation)
+            return self.zo_forward_nondiff(model, inputs)
+
+        with torch.inference_mode():
+            inputs = self._prepare_inputs(inputs)
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+            if self.args.n_gpu > 1:
+                # Warning: this is copied from the original Huggingface Trainer. Untested.
+                loss = loss.mean()  # mean() to average on multi-gpu parallel training
+        return loss.detach()
+
+
+    def zo_forward_nondiff(self, model, inputs):
+        """
+        Get (no gradient) non-diffiable loss from the model.
+        """
+        model.eval()
+        assert self.args.task_name == "SQuAD", "Non differentiable objective only supports SQuAD for now."
+
+        with torch.inference_mode():
+            inputs = self._prepare_inputs(inputs)
+            args = self.args
+            outputs = self.model.generate(
+                inputs["input_ids"], do_sample=args.sampling, temperature=args.temperature, 
+                num_beams=args.num_beams, top_p=args.top_p, top_k=args.top_k, max_new_tokens=min(args.max_new_tokens, args.max_length - inputs["input_ids"].size(1)), 
+                num_return_sequences=1, eos_token_id=[self.tokenizer.encode(args.eos_token, add_special_tokens=False)[-1], self.tokenizer.eos_token_id],
+            )
+            output_text = []
+            for i in range(len(outputs)):
+                output_text.append(self.tokenizer.decode(outputs[i][inputs["input_ids"].size(1):], skip_special_tokens=True).strip())
+            f1s = [f1(output_text[i], inputs['gold'][i]) for i in range(len(output_text))]
+        
+        return -torch.tensor(np.mean(f1s), dtype=torch.float32)
+
+
+    def zo_step(self, model, inputs):
+        """
+        Estimate gradient by MeZO. Return the loss from f(theta + z)
+        """
+        args = self.args
+
+        # What parameters to optimize 
+        self.named_parameters_to_optim = []
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.named_parameters_to_optim.append((name, param))
+
+        # Sample the random seed for sampling z
+        self.zo_random_seed = np.random.randint(1000000000)
+
+        # First function evaluation
+        self.zo_perturb_parameters(scaling_factor=1)
+        loss1 = self.zo_forward(model, inputs)
+
+        # Second function evaluation
+        self.zo_perturb_parameters(scaling_factor=-2)
+        loss2 = self.zo_forward(model, inputs)
+
+        self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+
+        # No gradient accumulation support
+        assert self.args.gradient_accumulation_steps == 1
+
+        # Reset model back to its parameters at start of step
+        self.zo_perturb_parameters(scaling_factor=1)
+        
+        return loss1
+
+
+    def zo_update(self, model):
+        """
+        Update the parameters with the estimated gradients.
+        """
+        args = self.args
+
+        # Reset the random seed for sampling zs
+        torch.manual_seed(self.zo_random_seed)     
+
+        for name, param in self.named_parameters_to_optim:
+            # Resample z
+            z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
+            if "bias" not in name and "layer_norm" not in name and "layernorm" not in name:
+                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z + args.weight_decay * param.data)
+            else:
+                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z)
+
+        self.lr_scheduler.step()
+
+
+
+
+
+@dataclass
+class DataTrainingArguments:
+    dataset_path: Optional[str] = field(
+        default="./data/datasets/gt/",
+        metadata={"help": "The path to the directory with the JSON files of the task."},
+    )
+    train_split: Optional[str] = field(
+        default="train",
+        metadata={"help": "The split to use for training."},
+    )
+    max_train_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": (
+                "For debugging purposes or quicker training, truncate the number of training examples to this "
+                "value if set."
+            )
+        },
+    )
+    max_eval_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": (
+                "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
+                "value if set."
+            )
+        },
+    )
+    overwrite_cache: bool = field(
+        default=False, 
+        metadata={"help": "Overwrite the cached training and evaluation sets"}
+    )
+    max_seq_length: Optional[int] = field(
+        default=64,
+        metadata={"help": "The maximum total input sequence length after tokenization."}
+    )
+    start_edge_sparsity: Optional[float] = field(
+        default=0.0,
+        metadata={"help": "The initial edge sparsity of the model."}
+    )
+    target_edge_sparsity: Optional[float] = field(
+        default=0.98,
+        metadata={"help": "The target edge sparsity of the model."}
+    )
+    start_layer_sparsity: Optional[float] = field(
+        default=0.0,
+        metadata={"help": "The initial layer sparsity of the model."}
+    )
+    target_layer_sparsity: Optional[float] = field(
+        default=0.68,
+        metadata={"help": "The target layer sparsity of the model."}
+    )
+    stop_optimizing_layer_if_higher_sparsity: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to stop optimizing the layer sparsity if it is higher than the target."}
+    )
+    num_sparsity_warmup_steps: Optional[int] = field(
+        default=0,
+        metadata={"help": "The number of steps to reach the target sparsity."}
+    )
+    edge_learning_rate: Optional[float] = field(
+        default=1e-2,
+        metadata={"help": "The learning rate for the regularization term."}
+    )
+    layer_learning_rate: Optional[float] = field(
+        default=1,
+        metadata={"help": "The learning rate for the regularization term."}
+    )
+    reg_edge_learning_rate: Optional[float] = field(
+        default=1e-2,
+        metadata={"help": "The learning rate for the regularization term."}
+    )
+    reg_layer_learning_rate: Optional[float] = field(
+        default=1,
+        metadata={"help": "The learning rate for the regularization term."}
+    )
+    warmup_type: Optional[str] = field(
+        default="linear",
+        metadata={"help": "The type of warmup to use for the regularization term."}
+    )
+    with_embedding_nodes: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to include the embedding nodes"}
+    )
+    disable_linear_reg_term: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to disable the linear regularization term."}
+    )
+    disable_node_loss: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to disable node loss."}
+    )
+
+@dataclass
+class ModelArguments:
+    """
+    Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
+    """
+    cache_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"},
+    )
+    model_revision: str = field(
+        default="main",
+        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
+    )
+    token: str = field(
+        default=None,
+        metadata={
+            "help": (
+                "The token to use as HTTP bearer authorization for remote files. If not specified, will use the token "
+                "generated when running `huggingface-cli login` (stored in `~/.huggingface`)."
+            )
+        },
+    )
+    use_auth_token: bool = field(
+        default=None,
+        metadata={
+            "help": "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token` instead."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether or not to allow for custom models defined on the Hub in their own modeling files. This option"
+                "should only be set to `True` for repositories you trust and in which you have read the code, as it will "
+                "execute code present on the Hub on your local machine."
+            )
+        },
+    )
+    ignore_mismatched_sizes: bool = field(
+        default=False,
+        metadata={"help": "Will enable to load a pretrained model whose head dimensions are different."},
+    )
+    initialize_from: str = field(
+        default="gpt2",
+        metadata={"help": "The model to initialize from."},
+    )
+
+def format_instance(instance, split):
+    if isinstance(instance, dict) and "min_steps" in instance:
+        return {
+            "tokens": instance["tokens"],
+            "split": split,
+            "min_steps": instance["min_steps"],
+        }
+    else:
+        return {
+            "tokens": instance,
+            "split": split,
+        }
+
+def load_datasets(dataset_path, max_train_samples, max_eval_samples, train_split="train"):
+    if os.path.exists(dataset_path):
+        dataset = load_from_disk(dataset_path)
+    else:
+        dataset = load_dataset(dataset_path)
+    if "validation" not in dataset:
+        assert max_eval_samples is not None, "Validation set is missing! (val)"
+        assert max_train_samples is not None, "Validation set is missing! (train)"
+        dataset = DatasetDict({
+            train_split: dataset[train_split].select(range(max_train_samples)),
+            "validation": dataset[train_split].select(range(max_train_samples, max_train_samples+max_eval_samples)),
+        })
+    else:
+        if max_train_samples is not None and max_train_samples < len(dataset[train_split]):
+            dataset[train_split] = dataset[train_split].select(range(max_train_samples))
+        if max_eval_samples is not None and max_eval_samples < len(dataset["validation"]):
+            dataset["validation"] = dataset["validation"].select(range(max_eval_samples))
+    return dataset
+
+class DataCollatorYear:
+    def __init__(
+        self, 
+        tokenizer,
+        max_length,
+    ):
+        self.tokenizer = tokenizer
+        self.max_length = max_length 
+
+    def __call__(self, examples):
+        input_ids = []
+        corr_input_ids = []
+        labels = []         # need to pass something otherwise compute_metrics will not be called
+        indices = []
+        digits = []
+        
+        for example in examples:
+            text = example["prefix"]
+            corr_text = example["corr_prefix"]
+            
+            input_ids_example = self.tokenizer(text, return_tensors="pt").input_ids[0]
+            corr_input_ids_example = self.tokenizer(corr_text, return_tensors="pt").input_ids[0]
+            indices.append(input_ids_example.shape[0] - 1)
+            input_ids_example = torch.nn.functional.pad(
+                input_ids_example, 
+                (0, self.max_length - input_ids_example.shape[0]), 
+                value=self.tokenizer.pad_token_id
+            )
+            corr_input_ids_example = torch.nn.functional.pad(
+                corr_input_ids_example,
+                (0, self.max_length - corr_input_ids_example.shape[0]),
+                value=self.tokenizer.pad_token_id
+            )
+            
+            input_ids.append(input_ids_example)
+            corr_input_ids.append(corr_input_ids_example)
+            labels.append(torch.ones_like(input_ids_example) * -100)
+            digits.append(int(example["digits"]))
+        
+        return {
+            "input_ids": torch.stack(input_ids),
+            "corr_input_ids": torch.stack(corr_input_ids),
+            "labels": torch.stack(labels),
+            "indices": torch.LongTensor(indices),
+            "digits": torch.LongTensor(digits),
+        }      
+
+def eval_fn(eval_pred):         
+    (
+        _, logits, reg_edge_loss, reg_layer_loss, target_edge_sparsity, target_layer_sparsity, model_edge_sparsity, model_layer_sparsity, 
+        kl_loss, prob_digits, digits
+    ) = eval_pred.predictions
+    
+    if len(model_edge_sparsity.shape) > 0:
+        model_edge_sparsity = model_edge_sparsity[0].item()
+        model_layer_sparsity = model_layer_sparsity[0].item()
+        target_edge_sparsity = target_edge_sparsity[0].item()
+        target_layer_sparsity = target_layer_sparsity[0].item()
+    else:
+        model_edge_sparsity = model_edge_sparsity.item()
+        model_layer_sparsity = model_layer_sparsity.item()
+        target_edge_sparsity = target_edge_sparsity.item()
+        target_layer_sparsity = target_layer_sparsity.item()
+    
+    probability_difference = 0
+    for i in range(digits.shape[0]):
+        probability_difference += prob_digits[i, digits[i]+1:].sum() - prob_digits[i, :digits[i]].sum()
+    probability_difference /= digits.shape[0]
+    
+    probability_difference_10 = 0
+    for i in range(digits.shape[0]):
+        probability_difference_10 += prob_digits[i, digits[i]+1:digits[i]+10].sum() - prob_digits[i, digits[i]-10:digits[i]].sum()
+    probability_difference_10 /= digits.shape[0]
+    
+    kl_loss = kl_loss.mean().item()
+    reg_edge_loss = reg_edge_loss.mean().item()
+    reg_layer_loss = reg_layer_loss.mean().item()
+    
+    return {
+        "eval_probability_difference": probability_difference,
+        "eval_probability_difference_10": probability_difference_10,
+        "model_edge_sparsity": model_edge_sparsity,
+        "model_layer_sparsity": model_layer_sparsity,
+        "target_edge_sparsity": target_edge_sparsity,
+        "target_layer_sparsity": target_layer_sparsity,
+        "eval_kl_loss": kl_loss,
+        "eval_reg_edge_loss": reg_edge_loss,
+        "eval_reg_layer_loss": reg_layer_loss,
+    }
+    
+def freeze_all_except_pruning_params(model):
+    for n, p in model.named_parameters():
+        if 'log_alpha' in n or 'sparsity_lambda' in n:
+            p.requires_grad = True
+        else:
+            p.requires_grad = False
+
+def get_optimizers(model, edges_lr, layers_lr, reg_edges_lr, reg_layers_lr, num_training_steps, warmup_steps=0, disable_node_loss=False):
+    optimizer_1_group = []
+    optimizer_2_group = []
+    optimizer_3_group = []
+    optimizer_4_group = []
+
+    for n, p in model.named_parameters():
+        if 'write_log_alpha' in n:
+            optimizer_3_group.append(p)
+        elif 'read_log_alpha' in n:
+            optimizer_1_group.append(p)
+        elif 'sparsity_lambda_edge' in n:
+            optimizer_2_group.append(p)
+        elif ('sparsity_lambda_node' in n) and (not disable_node_loss):
+            optimizer_4_group.append(p)
+    
+    optimizer = AdamW(
+        [
+            {
+                'params': optimizer_1_group,
+                'lr': edges_lr,
+            },
+            {
+                'params': optimizer_2_group,
+                'maximize': True,
+                'lr': reg_edges_lr,
+            },
+            {
+                'params': optimizer_3_group,
+                'lr': layers_lr,
+            },
+            {
+                'params': optimizer_4_group,
+                'maximize': True,
+                'lr': reg_layers_lr,
+            } 
+        ],
+        lr=edges_lr
+    )
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_training_steps)
+
+    return optimizer, scheduler
+
+def main():
+    # See all possible arguments in src/transformers/training_args.py
+    # or by passing the --help flag to this script.
+    # We now keep distinct sets of args, for a cleaner separation of concerns.
+
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, Seq2SeqTrainingArguments))
+    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
+        # If we pass only one argument to the script and it's the path to a json file,
+        # let's parse it to get our arguments.
+        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+    else:
+        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+
+    if model_args.use_auth_token is not None:
+        warnings.warn(
+            "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token` instead.",
+            FutureWarning,
+        )
+        if model_args.token is not None:
+            raise ValueError("`token` and `use_auth_token` are both specified. Please set only the argument `token`.")
+        model_args.token = model_args.use_auth_token
+
+    # Setup logging
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+
+    if training_args.should_log:
+        # The default of training_args.log_level is passive, so we set log level at info here to have that default.
+        transformers.utils.logging.set_verbosity_info()
+
+    log_level = training_args.get_process_log_level()
+    logger.setLevel(log_level)
+    datasets.utils.logging.set_verbosity(log_level)
+    transformers.utils.logging.set_verbosity(log_level)
+    transformers.utils.logging.enable_default_handler()
+    transformers.utils.logging.enable_explicit_format()
+
+    # Log on each process the small summary:
+    logger.warning(
+        f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}, "
+        + f"distributed training: {training_args.parallel_mode.value == 'distributed'}, 16-bits training: {training_args.fp16}"
+    )
+    logger.info(f"Training/evaluation parameters {training_args}")
+
+    # Detecting last checkpoint.
+    last_checkpoint = None
+    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
+        last_checkpoint = get_last_checkpoint(training_args.output_dir)
+        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
+            raise ValueError(
+                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
+                "Use --overwrite_output_dir to overcome."
+            )
+        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
+            logger.info(
+                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
+                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
+            )
+
+    # Set seed before initializing model.
+    set_seed(training_args.seed)
+
+    raw_datasets = load_datasets(data_args.dataset_path, data_args.max_train_samples, data_args.max_eval_samples, data_args.train_split)
+    n_train = len(raw_datasets["train"])
+    
+    model = FPT2LMHeadModel.from_pretrained(
+        model_args.initialize_from,
+        with_embedding_nodes=data_args.with_embedding_nodes,
+        disable_linear_regularization_term=data_args.disable_linear_reg_term,
+    )
+    gpt2_model = FPT2LMHeadModel.from_pretrained(
+        "gpt2",
+        with_embedding_nodes=data_args.with_embedding_nodes,
+    ).to("cuda")
+    
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+    
+    freeze_all_except_pruning_params(model)
+
+    if training_args.do_train:
+        if "train" not in raw_datasets:
+            raise ValueError("--do_train requires a train dataset")
+        train_dataset = raw_datasets["train"]
+
+    if training_args.do_eval:
+        # We don't have a validation dataset, so we'll just use the test dataset.
+        if "validation" not in raw_datasets:
+            raise ValueError("--do_eval requires a validation dataset")
+        eval_dataset = raw_datasets["validation"]
+
+    # Data collator
+    collator = DataCollatorYear(
+        tokenizer=tokenizer,
+        max_length=data_args.max_seq_length
+    )
+    
+    optimizers = get_optimizers(
+        model, 
+        edges_lr=data_args.edge_learning_rate,
+        layers_lr=data_args.layer_learning_rate,
+        reg_edges_lr=data_args.reg_edge_learning_rate,
+        reg_layers_lr=data_args.reg_layer_learning_rate,
+        num_training_steps=training_args.max_steps,
+        warmup_steps=training_args.warmup_steps,
+        disable_node_loss=data_args.disable_node_loss
+    )
+
+    # Initialize our Trainer
+    trainer = FPT2InfoTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        gpt2_model=gpt2_model,
+        data_collator=collator,
+        args=training_args,
+        train_dataset=train_dataset if training_args.do_train else None,
+        eval_dataset=eval_dataset if training_args.do_eval else None,
+        compute_metrics=eval_fn,
+        optimizers=optimizers,
+        start_edge_sparsity=data_args.start_edge_sparsity,
+        target_edge_sparsity=data_args.target_edge_sparsity,
+        start_layer_sparsity=data_args.start_layer_sparsity,
+        target_layer_sparsity=data_args.target_layer_sparsity,
+        skip_layer_loss_if_higher_sparsity=data_args.stop_optimizing_layer_if_higher_sparsity,
+        num_sparsity_warmup_steps=data_args.num_sparsity_warmup_steps,
+        warmup_type=data_args.warmup_type,
+    )
+
+    # Training
+    if training_args.do_train:
+        checkpoint = None
+        if training_args.resume_from_checkpoint is not None:
+            checkpoint = training_args.resume_from_checkpoint
+        elif last_checkpoint is not None:
+            checkpoint = last_checkpoint
+        train_result = trainer.train(
+            resume_from_checkpoint=checkpoint,
+        )
+        metrics = train_result.metrics
+        max_train_samples = (
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+        )
+        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
+
+        trainer.save_model()  # Saves the tokenizer too for easy upload
+
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
+
+    kwargs = {"finetuned_from": "gpt-2"}
+
+    if training_args.push_to_hub:
+        trainer.push_to_hub(**kwargs)
+    else:
+        trainer.create_model_card(**kwargs)
+
+
+def _mp_fn(index):
+    # For xla_spawn (TPUs)
+    main()
+
+
+if __name__ == "__main__":
+    main()

@@ -31,3 +31,8 @@ Installing additional packages:
 1. Install via `pip`
 2. Find the version used
 3. Manually add the package to `environment.yml` with the version. **DO NOT USE conda env export**
+
+## Questions
+
+1. Should we inherrit from their class (and then do _inner_training_loop) or just re-write their file?
+

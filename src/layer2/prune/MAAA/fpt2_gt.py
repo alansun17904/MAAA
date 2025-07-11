@@ -17,7 +17,7 @@
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
 
-import logging
+import logging as logging_py
 import os
 import torch
 import pickle
@@ -60,11 +60,10 @@ from transformers.utils.versions import require_version
 ######## MeZO Imports ########
 
 import math
-import version
+from packaging import version
 import importlib
 import time
 import shutil
-from metrics import f1
 
 
 
@@ -106,7 +105,6 @@ from transformers import __version__
 from transformers.configuration_utils import PretrainedConfig
 from transformers.data.data_collator import DataCollator, DataCollatorWithPadding, default_data_collator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
-from transformers.deepspeed import deepspeed_init, is_deepspeed_zero3_enabled
 from transformers.dependency_versions_check import dep_version_check
 from transformers.modelcard import TrainingSummary
 from transformers.modeling_utils import PreTrainedModel, load_sharded_checkpoint, unwrap_model
@@ -256,7 +254,7 @@ sys.path.append(
 from modeling_fpt2 import FPT2LMHeadModel
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
-logger = logging.getLogger(__name__)
+logger = logging_py.getLogger(__name__)
 
 def _is_peft_model(model):
     if is_peft_available():
@@ -954,6 +952,27 @@ class FPT2InfoTrainer(Seq2SeqTrainer):
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
         return loss.detach()
 
+    def f1(pred, gold):
+        """
+        This separate F1 function is used as non-differentiable metric for SQuAD
+        """
+        if gold[0] == "CANNOTANSWER" or gold[0] == "no answer":
+            return int(normalize_answer(gold[0]) == normalize_answer(pred))
+        else:
+            all_f1s = []
+            for ans in gold:
+                prediction_tokens = normalize_answer(pred).split()
+                ground_truth_tokens = normalize_answer(ans).split()
+                common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
+                num_same = sum(common.values())
+                if num_same == 0:
+                    all_f1s.append(0)
+                else:
+                    precision = 1.0 * num_same / len(prediction_tokens)
+                    recall = 1.0 * num_same / len(ground_truth_tokens)
+                    all_f1s.append((2 * precision * recall) / (precision + recall))
+            return np.max(all_f1s)
+
 
     def zo_forward_nondiff(self, model, inputs):
         """
@@ -1175,6 +1194,22 @@ class ModelArguments:
         metadata={"help": "The model to initialize from."},
     )
 
+@dataclass
+class OurTrainingArgs(Seq2SeqTrainingArguments):
+    trainer: str = field(
+        default="zo",
+        metadata={"help" : "The trainer to use. Specify \'zo\' for MeZO or anything else for standard"},
+    )
+    zo_eps: float = field(
+        default = 1e-3,
+        metadata={"help" : 'eps in MeZO'},
+    )
+    # Not sure why this one is here, but MeZO code uses it
+    non_diff: bool = field(
+        default = False,
+        metadata = {"help" : "Not sure exactly why. MeZO explanation: use non-differentiable objective (only support F1 for SQuAD for now)"},
+    )
+
 def format_instance(instance, split):
     if isinstance(instance, dict) and "min_steps" in instance:
         return {
@@ -1353,7 +1388,7 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, Seq2SeqTrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArgs))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -1361,9 +1396,6 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    print(f'MODEL ARGS: {model_args}')
-    print(f'DATA ARGS: {data_args}')
-    print(f'TRAINING ARGS: {training_args}')
 
     if model_args.use_auth_token is not None:
         warnings.warn(
@@ -1375,10 +1407,10 @@ def main():
         model_args.token = model_args.use_auth_token
 
     # Setup logging
-    logging.basicConfig(
+    logging_py.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
-        handlers=[logging.StreamHandler(sys.stdout)],
+        handlers=[logging_py.StreamHandler(sys.stdout)],
     )
 
     if training_args.should_log:

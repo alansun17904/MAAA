@@ -57,23 +57,121 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-# MeZO imports
+######## MeZO Imports ########
+
+
 from transformers.trainer_pt_utils import _get_learning_rate, log_metrics, metrics_format, save_metrics, save_state
+from transformers.trainer_utils import (
+    has_length
+)
+from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 TRAINER_STATE_NAME = "trainer_state.json"
+
+
+
+from transformers import __version__
+from transformers.configuration_utils import PretrainedConfig
+from transformers.data.data_collator import DataCollator, DataCollatorWithPadding, default_data_collator
+from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
+from transformers.deepspeed import deepspeed_init, is_deepspeed_zero3_enabled
+from transformers.dependency_versions_check import dep_version_check
+from transformers.modelcard import TrainingSummary
+from transformers.modeling_utils import PreTrainedModel, load_sharded_checkpoint, unwrap_model
+from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES, MODEL_MAPPING_NAMES
+from transformers.optimization import Adafactor, get_scheduler
+from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers.trainer_callback import (
+    CallbackHandler,
+    DefaultFlowCallback,
+    PrinterCallback,
+    ProgressCallback,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+)
+from transformers.trainer_pt_utils import (
+    DistributedLengthGroupedSampler,
+    DistributedSamplerWithLoop,
+    DistributedTensorGatherer,
+    IterableDatasetShard,
+    LabelSmoother,
+    LengthGroupedSampler,
+    SequentialDistributedSampler,
+    ShardSampler,
+    distributed_broadcast_scalars,
+    distributed_concat,
+    find_batch_size,
+    get_module_class_from_name,
+    get_parameter_names,
+    nested_concat,
+    nested_detach,
+    nested_numpify,
+    nested_truncate,
+    nested_xla_mesh_reduce,
+    reissue_pt_warnings,
+)
+from transformers.trainer_utils import (
+    PREFIX_CHECKPOINT_DIR,
+    BestRun,
+    EvalLoopOutput,
+    EvalPrediction,
+    FSDPOption,
+    HPSearchBackend,
+    HubStrategy,
+    IntervalStrategy,
+    PredictionOutput,
+    RemoveColumnsCollator,
+    ShardedDDPOption,
+    TrainerMemoryTracker,
+    TrainOutput,
+    default_compute_objective,
+    default_hp_space,
+    denumpify_detensorize,
+    enable_full_determinism,
+    find_executable_batch_size,
+    get_last_checkpoint,
+    has_length,
+    number_of_arguments,
+    seed_worker,
+    set_seed,
+    speed_metrics,
+)
+from transformers.training_args import OptimizerNames, ParallelMode, TrainingArguments
+from transformers.utils import (
+    CONFIG_NAME,
+    WEIGHTS_INDEX_NAME,
+    WEIGHTS_NAME,
+    find_labels,
+    get_full_repo_name,
+    is_apex_available,
+    is_datasets_available,
+    is_in_notebook,
+    is_ipex_available,
+    is_sagemaker_dp_enabled,
+    is_sagemaker_mp_enabled,
+    is_torch_tensorrt_fx_available,
+    is_torch_tpu_available,
+    is_torchdynamo_available,
+    logging,
+)
+from transformers.utils.generic import ContextManagers
+
+######## End MeZO Imports ########
+
 
 import torch.nn as nn
 from torch.optim import AdamW
 
-# import sys
-# sys.path.append(
-#     os.path.join(
-#         os.getcwd(),
-#         "src/layer2/modeling/"
-#     )
-# )   # Very hacky but the imports are annoying otherwise
+import sys
+sys.path.append(
+    os.path.join(
+        os.getcwd(),
+        "src/layer2/modeling/"
+    )
+)   # Very hacky but the imports are annoying otherwise
 
-from ...modeling.modeling_fpt2 import FPT2LMHeadModel
-
+from modeling_fpt2 import FPT2LMHeadModel
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
 logger = logging.getLogger(__name__)
@@ -214,79 +312,7 @@ class FPT2InfoTrainer(Seq2SeqTrainer):
         # Data loader and number of training steps
         train_dataloader = self.get_train_dataloader()
 
-        # MeZO added: Linear probing
-        if self.args.linear_probing:
-
-            def _get_token_prediction_layer(model):
-                if model.config.model_type == "opt":
-                    return model.lm_head
-                else:
-                    raise NotImplementedError(model.config.model_type)
-
-            def _extract_features(model, *args, **kwargs):
-                """some magic for getting features pre last layer"""
-                features = {}
-                def __hook(model_, input_, output_):
-                    features["features"] = input_[0].detach()
-
-                _get_token_prediction_layer(model).register_forward_hook(__hook)
-                model.forward(*args, **kwargs)
-                return features["features"]
-
-            logger.info("Linear probing")
-            logger.info("Starting to get features for training dataset")
-            targets = []
-            features = []
-            with torch.inference_mode():
-                for step, inputs in enumerate(tqdm(train_dataloader)):
-                    for k, v in inputs.items():
-                        if isinstance(v, torch.Tensor):
-                            inputs[k] = v.to(self.model.device)
-                        
-                    feature = _extract_features(self.model, **inputs)
-                    target = inputs["labels"]
-
-                    # Shift the target (bc it's autoregressive LM) and add the corresponding part
-                    assert not self.args.train_as_classification and self.args.only_train_option
-                    feature, target = feature[:, :-1], target[:, 1:]
-                    for _i, _len in enumerate(inputs["option_len"]):
-                        features.append(feature[_i, -_len:])
-                        targets.append(target[_i, -_len:])
-
-            logger.info("Finished getting features for training dataset")
-
-            features = torch.cat(features, dim=0).cpu().numpy()
-            targets = torch.cat(targets, dim=0).cpu().numpy()
-            # Whether to use bias
-            if self.model.config.model_type in ["opt", "gpt2"]:
-                use_bias = False
-            else:
-                raise NotImplementedError
-            # Set early stopping
-            tol = 0.01 if self.args.lp_early_stopping else 1e-4 # 1e-4 is scipy default
-            max_iter = 1000 if self.args.lp_early_stopping else 5000
-
-            logger.info("Fitting logistic regression...")
-            reg = LogisticRegressionCV(max_iter=max_iter, fit_intercept=use_bias, multi_class="multinomial", random_state=0, tol=tol, n_jobs=-1).fit(features, targets)
-            logger.info("Done")
-
-            logger.info("Assigning weights to model")
-            decoder = _get_token_prediction_layer(self.model)
-            coef_torch = torch.tensor(reg.coef_, device=decoder.weight.device, dtype=decoder.weight.dtype)
-            if use_bias:
-                bias_torch = torch.tensor(reg.intercept_, device=decoder.weight.device, dtype=decoder.weight.dtype)
-            if coef_torch.shape[0] == 1: # The regressor only detects two classes
-                assert len(reg.classes_) == 2
-                coef_torch = torch.cat([-coef_torch / 2, coef_torch / 2], dim=0)
-                if use_bias:
-                    bias_torch = torch.cat([-bias_torch / 2, bias_torch / 2], dim=0)
-
-            for _i, token_id in enumerate(reg.classes_):
-                decoder.weight.data[token_id] = coef_torch[_i]
-                if use_bias:
-                    decoder.bias.data[token_id] = bias_torch[_i]
-
-            return None
+        # MAAA / Efficent Circuit Discovery ignores the linear probing in MeZO codebase --> see MeZO/large_models/README.md
 
         # Setting up training control variables:
         # number of training epochs: num_train_epochs
@@ -459,15 +485,9 @@ class FPT2InfoTrainer(Seq2SeqTrainer):
                 is_random_sampler = hasattr(train_dataloader, "sampler") and isinstance(
                     train_dataloader.sampler, RandomSampler
                 )
-                if is_torch_less_than_1_11 or not is_random_sampler:
-                    # We just need to begin an iteration to create the randomization of the sampler.
-                    # That was before PyTorch 1.11 however...
-                    for _ in train_dataloader:
-                        break
-                else:
-                    # Otherwise we need to call the whooooole sampler cause there is some random operation added
-                    # AT THE VERY END!
-                    _ = list(train_dataloader.sampler)
+                # Otherwise we need to call the whooooole sampler cause there is some random operation added
+                # AT THE VERY END!
+                _ = list(train_dataloader.sampler)
 
         for epoch in range(epochs_trained, num_train_epochs):
             if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):

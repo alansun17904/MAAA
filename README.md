@@ -19,12 +19,15 @@ Install conda (skip if already installed).
 
 1. Run the following command: `conda env create -f environment.yml`
 2. Run `conda activate MAAA_CD`
+3. Unzip data.zip
 
 
 ## Run Experiments
 
 
 ## Development
+
+We recommend developing on an evironment that has cuda available. The reason for this is that the scripts will often halt because cuda is not available, before testing the majority of other functionality / configuration. For this reason, any environment with a compatible version of CUDA (see Pytorch for compatability), regardless of VRAM / hardware capabilities, is recommended for development. Additionally, linux makes things easier (but should not be necessary).
 
 Installing additional packages:
 

@@ -16,6 +16,7 @@
 """ Finetuning the library models for sequence classification on GLUE."""
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
+
 import logging
 import os
 import torch
@@ -63,14 +64,16 @@ TRAINER_STATE_NAME = "trainer_state.json"
 import torch.nn as nn
 from torch.optim import AdamW
 
-import sys
-sys.path.append(
-    os.path.join(
-        os.getcwd(),
-        "src/layer2/modeling/"
-    )
-)   # Very hacky but the imports are annoying otherwise
-from modeling_fpt2 import FPT2LMHeadModel
+# import sys
+# sys.path.append(
+#     os.path.join(
+#         os.getcwd(),
+#         "src/layer2/modeling/"
+#     )
+# )   # Very hacky but the imports are annoying otherwise
+
+from ...modeling.modeling_fpt2 import FPT2LMHeadModel
+
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
 logger = logging.getLogger(__name__)
@@ -1107,8 +1110,6 @@ def get_optimizers(model, edges_lr, layers_lr, reg_edges_lr, reg_layers_lr, num_
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_training_steps)
 
     return optimizer, scheduler
-
-
 
 
 def main():

@@ -39,3 +39,10 @@ Installing additional packages:
 
 1. Should we inherrit from their class (and then do _inner_training_loop) or just re-write their file?
 
+PR Notes:
+1. How to test the code
+2. Screenshots of testing
+3. Explain changes / ideas
+4. Make sure conda env file is updated
+5. Couldn't implement the pytest importing stuff
+6. Where should logger go (in each file, one file, etc)

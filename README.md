@@ -48,3 +48,4 @@ PR Notes:
 6. Where should logger go (in each file, one file, etc)
 7. Could probably make the MeZO stuff one file (using the args)
 8. Could probably make the runscripts for all
+9. Where should runs be stored (and how should they be contrasted?)

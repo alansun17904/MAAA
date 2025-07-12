@@ -24,6 +24,14 @@ Install conda (skip if already installed).
 
 ## Run Experiments
 
+Pruning scripts are found in scripts/ - following the same convention as the EdgePruning codebase. Currently, they are not configured to a specific experiment, rather just testing basic functionality. 
+
+
+Evaluation scripts are found in `src/layer2/eval/{ioi/gt/gp}.py`. To evaluate a circuit found with the default settings above, you can simply run, for example,
+```
+python src/eval/ioi.py -m /path/to/pruned_model -w
+```
+
 
 ## Development
 

@@ -16,7 +16,7 @@
 """ Finetuning the library models for sequence classification on GLUE."""
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
-import logging
+import logging as logging_py
 import os
 import torch
 import pickle
@@ -26,6 +26,7 @@ import json
 import warnings
 from dataclasses import dataclass, field
 from typing import Optional
+import math
 
 import datasets
 import evaluate
@@ -59,19 +60,21 @@ from transformers.utils.versions import require_version
 import torch.nn as nn
 from torch.optim import AdamW
 
+from mezo import MeZOTrainer, MeZOTrainingArguments
+
 import sys
 sys.path.append(
     os.path.join(
         os.getcwd(),
-        "src/modeling/"
+        "src/layer2/modeling/"
     )
 )   # Very hacky but the imports are annoying otherwise
 from modeling_fpt2 import FPT2LMHeadModel
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
-logger = logging.getLogger(__name__)
+logger = logging_py.getLogger(__name__)
 
-class FPT2InfoTrainer(Seq2SeqTrainer):
+class FPT2InfoTrainer(MeZOTrainer):
     def __init__(self, *args, **kwargs):
         self.target_edge_sparsity = kwargs.pop('target_edge_sparsity', 0.0)
         self.start_edge_sparsity = kwargs.pop('start_edge_sparsity', 0.0)
@@ -580,7 +583,7 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, Seq2SeqTrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, MeZOTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -598,10 +601,10 @@ def main():
         model_args.token = model_args.use_auth_token
 
     # Setup logging
-    logging.basicConfig(
+    logging_py.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
-        handlers=[logging.StreamHandler(sys.stdout)],
+        handlers=[logging_py.StreamHandler(sys.stdout)],
     )
 
     if training_args.should_log:

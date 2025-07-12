@@ -64,7 +64,6 @@ WANDB_MODE=disabled python src/layer2/prune/${VERSION}/fpt2_ioi.py \
     --dataloader_num_workers 0 \
     --warmup_type linear \
     --with_embedding_nodes \
-    --trainer EdgePruning \
     $EXTRA
 
 done

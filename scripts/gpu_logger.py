@@ -2,13 +2,8 @@ import subprocess
 import json
 import time
 from datetime import datetime
-
-LOG_FILE = "gpu_log.jsonl"
-INTERVAL = 5  # seconds
-
-print(f"Logging GPU info every {INTERVAL} seconds...")
-print(f"Writing to {LOG_FILE}")
-print("Press Ctrl+C to stop.")
+import argparse
+import os
 
 def get_gpu_metrics():
     try:
@@ -43,7 +38,16 @@ def get_gpu_metrics():
         return []
 
 def main():
-    with open(LOG_FILE, 'a') as log_file:
+    parser = argparse.ArgumentParser(description="Log GPU usage every 5 seconds to a JSON Lines file.")
+    parser.add_argument("label", type=str, help="Label to identify the log file (e.g., 'experiment1', 'runA')")
+    args = parser.parse_args()
+
+    log_filename = f"gpu_log_{args.label}.jsonl"
+    print(f"Logging GPU info every 5 seconds...")
+    print(f"Writing to {log_filename}")
+    print("Press Ctrl+C to stop.")
+
+    with open(log_filename, 'a') as log_file:
         while True:
             metrics = get_gpu_metrics()
             for entry in metrics:
@@ -51,7 +55,7 @@ def main():
                 print(line)
                 log_file.write(line + '\n')
                 log_file.flush()
-            time.sleep(INTERVAL)
+            time.sleep(5)
 
 if __name__ == "__main__":
     main()

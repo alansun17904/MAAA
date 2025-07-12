@@ -46,3 +46,5 @@ PR Notes:
 4. Make sure conda env file is updated
 5. Couldn't implement the pytest importing stuff
 6. Where should logger go (in each file, one file, etc)
+7. Could probably make the MeZO stuff one file (using the args)
+8. Could probably make the runscripts for all

@@ -63,7 +63,7 @@ import sys
 sys.path.append(
     os.path.join(
         os.getcwd(),
-        "src/modeling/"
+        "src/layer2/modeling/"
     )
 )   # Very hacky but the imports are annoying otherwise
 from modeling_fpt2 import FPT2LMHeadModel

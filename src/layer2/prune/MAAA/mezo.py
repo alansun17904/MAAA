@@ -208,129 +208,6 @@ def _is_peft_model(model):
 
 
 
-############## MeZO EXTRA Stuff##############
-
-
-def zo_perturb_parameters(self, random_seed=None, scaling_factor=1):
-    """
-    Perturb the parameters with random vector z.
-    Input: 
-    - random_seed: random seed for MeZO in-place perturbation (if it's None, we will use zo_random_seed)
-    - scaling_factor: theta = theta + scaling_factor * z * eps
-    """
-    # Set the random seed to ensure that we sample the same z for perturbation/update
-    torch.manual_seed(random_seed if random_seed is not None else zo_random_seed)
-    
-    for name, param in self.named_parameters_to_optim:
-        z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
-        param.data = param.data + scaling_factor * z * self.args.zo_eps
-
-
-def zo_forward(self, model, inputs):
-    """
-    Get (no gradient) loss from the model. Dropout is turned off too.
-    """
-    model.eval()
-    if self.args.non_diff:
-        # Non-differentiable objective (may require autoregressive generation)
-        return zo_forward_nondiff(model, inputs)
-    with torch.inference_mode():
-        inputs = self._prepare_inputs(inputs)
-        with self.compute_loss_context_manager():
-            loss = self.compute_loss(model, inputs)
-        if self.args.n_gpu > 1:
-            # Warning: this is copied from the original Huggingface Trainer. Untested.
-            loss = loss.mean()  # mean() to average on multi-gpu parallel training
-    return loss.detach()
-
-def f1(pred, gold):
-    """
-    This separate F1 function is used as non-differentiable metric for SQuAD
-    """
-    if gold[0] == "CANNOTANSWER" or gold[0] == "no answer":
-        return int(normalize_answer(gold[0]) == normalize_answer(pred))
-    else:
-        all_f1s = []
-        for ans in gold:
-            prediction_tokens = normalize_answer(pred).split()
-            ground_truth_tokens = normalize_answer(ans).split()
-            common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
-            num_same = sum(common.values())
-            if num_same == 0:
-                all_f1s.append(0)
-            else:
-                precision = 1.0 * num_same / len(prediction_tokens)
-                recall = 1.0 * num_same / len(ground_truth_tokens)
-                all_f1s.append((2 * precision * recall) / (precision + recall))
-        return np.max(all_f1s)
-
-
-def zo_forward_nondiff(self, model, inputs):
-    """
-    Get (no gradient) non-diffiable loss from the model.
-    """
-    model.eval()
-    assert self.args.task_name == "SQuAD", "Non differentiable objective only supports SQuAD for now."
-    with torch.inference_mode():
-        inputs = self._prepare_inputs(inputs)
-        args = self.args
-        outputs = self.model.generate(
-            inputs["input_ids"], do_sample=args.sampling, temperature=args.temperature, 
-            num_beams=args.num_beams, top_p=args.top_p, top_k=args.top_k, max_new_tokens=min(args.max_new_tokens, args.max_length - inputs["input_ids"].size(1)), 
-            num_return_sequences=1, eos_token_id=[self.tokenizer.encode(args.eos_token, add_special_tokens=False)[-1], self.tokenizer.eos_token_id],
-        )
-        output_text = []
-        for i in range(len(outputs)):
-            output_text.append(self.tokenizer.decode(outputs[i][inputs["input_ids"].size(1):], skip_special_tokens=True).strip())
-        f1s = [f1(output_text[i], inputs['gold'][i]) for i in range(len(output_text))]
-    
-    return -torch.tensor(np.mean(f1s), dtype=torch.float32)
-
-
-def zo_step(self, model, inputs):
-    """
-    Estimate gradient by MeZO. Return the loss from f(theta + z)
-    """
-    args = self.args
-    # What parameters to optimize 
-    self.named_parameters_to_optim = []
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            self.named_parameters_to_optim.append((name, param))
-    # Sample the random seed for sampling z
-    zo_random_seed = np.random.randint(1000000000)
-    # First function evaluation
-    zo_perturb_parameters(scaling_factor=1)
-    loss1 = zo_forward(model, inputs)
-    # Second function evaluation
-    zo_perturb_parameters(scaling_factor=-2)
-    loss2 = zo_forward(model, inputs)
-    self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
-    # No gradient accumulation support
-    assert self.args.gradient_accumulation_steps == 1
-    # Reset model back to its parameters at start of step
-    zo_perturb_parameters(scaling_factor=1)
-    
-    return loss1
-
-
-def zo_update(self, model):
-    """
-    Update the parameters with the estimated gradients.
-    """
-    args = self.args
-    # Reset the random seed for sampling zs
-    torch.manual_seed(zo_random_seed)     
-    for name, param in self.named_parameters_to_optim:
-        # Resample z
-        z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
-        if "bias" not in name and "layer_norm" not in name and "layernorm" not in name:
-            param.data = param.data - self._get_learning_rate() * (self.projected_grad * z + args.weight_decay * param.data)
-        else:
-            param.data = param.data - self._get_learning_rate() * (self.projected_grad * z)
-    self.lr_scheduler.step()
-
-
 class MeZOTrainer(Seq2SeqTrainer):
     # MAAA
 
@@ -671,7 +548,7 @@ class MeZOTrainer(Seq2SeqTrainer):
 
                 # MeZO added: estimate gradient
                 if args.trainer =='zo':
-                    tr_loss_step = zo_step(model, inputs)
+                    tr_loss_step = self.zo_step(model, inputs)
                 else:
                     with self.accelerator.accumulate(model):
                         tr_loss_step = self.training_step(model, inputs)
@@ -708,7 +585,7 @@ class MeZOTrainer(Seq2SeqTrainer):
                     # not sure if the first if statement in the following else block should be 
                     # included in MeZO block
                     if args.trainer == "zo":
-                        zo_update(model)
+                        self.zo_update(model)
                     else:
                     
                         # the `or` condition of `is_last_step_and_steps_less_than_grad_acc` is not covered
@@ -858,6 +735,142 @@ class MeZOTrainer(Seq2SeqTrainer):
             self._deactivate_neftune(self.model)
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
+    
+
+    ############## MeZO EXTRA Stuff##############
+
+
+    def zo_perturb_parameters(self, random_seed=None, scaling_factor=1):
+        """
+        Perturb the parameters with random vector z.
+        Input: 
+        - random_seed: random seed for MeZO in-place perturbation (if it's None, we will use self.zo_random_seed)
+        - scaling_factor: theta = theta + scaling_factor * z * eps
+        """
+
+        # Set the random seed to ensure that we sample the same z for perturbation/update
+        torch.manual_seed(random_seed if random_seed is not None else self.zo_random_seed)
+        
+        for name, param in self.named_parameters_to_optim:
+            z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
+            param.data = param.data + scaling_factor * z * self.args.zo_eps
+
+
+    def zo_forward(self, model, inputs):
+        """
+        Get (no gradient) loss from the model. Dropout is turned off too.
+        """
+        model.eval()
+        if self.args.non_diff:
+            # Non-differentiable objective (may require autoregressive generation)
+            return self.zo_forward_nondiff(model, inputs)
+
+        with torch.inference_mode():
+            inputs = self._prepare_inputs(inputs)
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+            if self.args.n_gpu > 1:
+                # Warning: this is copied from the original Huggingface Trainer. Untested.
+                loss = loss.mean()  # mean() to average on multi-gpu parallel training
+        return loss.detach()
+
+    def f1(pred, gold):
+        """
+        This separate F1 function is used as non-differentiable metric for SQuAD
+        """
+        if gold[0] == "CANNOTANSWER" or gold[0] == "no answer":
+            return int(normalize_answer(gold[0]) == normalize_answer(pred))
+        else:
+            all_f1s = []
+            for ans in gold:
+                prediction_tokens = normalize_answer(pred).split()
+                ground_truth_tokens = normalize_answer(ans).split()
+                common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
+                num_same = sum(common.values())
+                if num_same == 0:
+                    all_f1s.append(0)
+                else:
+                    precision = 1.0 * num_same / len(prediction_tokens)
+                    recall = 1.0 * num_same / len(ground_truth_tokens)
+                    all_f1s.append((2 * precision * recall) / (precision + recall))
+            return np.max(all_f1s)
+
+
+    def zo_forward_nondiff(self, model, inputs):
+        """
+        Get (no gradient) non-diffiable loss from the model.
+        """
+        model.eval()
+        assert self.args.task_name == "SQuAD", "Non differentiable objective only supports SQuAD for now."
+
+        with torch.inference_mode():
+            inputs = self._prepare_inputs(inputs)
+            args = self.args
+            outputs = self.model.generate(
+                inputs["input_ids"], do_sample=args.sampling, temperature=args.temperature, 
+                num_beams=args.num_beams, top_p=args.top_p, top_k=args.top_k, max_new_tokens=min(args.max_new_tokens, args.max_length - inputs["input_ids"].size(1)), 
+                num_return_sequences=1, eos_token_id=[self.tokenizer.encode(args.eos_token, add_special_tokens=False)[-1], self.tokenizer.eos_token_id],
+            )
+            output_text = []
+            for i in range(len(outputs)):
+                output_text.append(self.tokenizer.decode(outputs[i][inputs["input_ids"].size(1):], skip_special_tokens=True).strip())
+            f1s = [f1(output_text[i], inputs['gold'][i]) for i in range(len(output_text))]
+        
+        return -torch.tensor(np.mean(f1s), dtype=torch.float32)
+
+
+    def zo_step(self, model, inputs):
+        """
+        Estimate gradient by MeZO. Return the loss from f(theta + z)
+        """
+        args = self.args
+
+        # What parameters to optimize 
+        self.named_parameters_to_optim = []
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.named_parameters_to_optim.append((name, param))
+
+        # Sample the random seed for sampling z
+        self.zo_random_seed = np.random.randint(1000000000)
+
+        # First function evaluation
+        self.zo_perturb_parameters(scaling_factor=1)
+        loss1 = self.zo_forward(model, inputs)
+
+        # Second function evaluation
+        self.zo_perturb_parameters(scaling_factor=-2)
+        loss2 = self.zo_forward(model, inputs)
+
+        self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+
+        # No gradient accumulation support
+        assert self.args.gradient_accumulation_steps == 1
+
+        # Reset model back to its parameters at start of step
+        self.zo_perturb_parameters(scaling_factor=1)
+        
+        return loss1
+
+
+    def zo_update(self, model):
+        """
+        Update the parameters with the estimated gradients.
+        """
+        args = self.args
+
+        # Reset the random seed for sampling zs
+        torch.manual_seed(self.zo_random_seed)     
+
+        for name, param in self.named_parameters_to_optim:
+            # Resample z
+            z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
+            if "bias" not in name and "layer_norm" not in name and "layernorm" not in name:
+                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z + args.weight_decay * param.data)
+            else:
+                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z)
+
+        self.lr_scheduler.step()
     
 @dataclass
 class MeZOTrainingArguments(Seq2SeqTrainingArguments):

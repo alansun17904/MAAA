@@ -188,7 +188,7 @@ if is_accelerate_available():
         from accelerate.utils import DeepSpeedSchedulerWrapper
 
 
-logger = logging_py.get_logger(__name__)
+logger = logging_py.getLogger(__name__)
 
 zo_random_seed = np.random.randint(1000000000)
 

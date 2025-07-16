@@ -837,12 +837,15 @@ class MeZOTrainer(Seq2SeqTrainer):
         # First function evaluation
         self.zo_perturb_parameters(scaling_factor=1)
         loss1 = self.zo_forward(model, inputs)
+        logger.debug(f'LOSS 1: {loss1}')
 
         # Second function evaluation
         self.zo_perturb_parameters(scaling_factor=-2)
         loss2 = self.zo_forward(model, inputs)
+        logger.debug(f'LOSS 2: {loss2}')
 
         self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+        logger.debug(f'PROJECTED_GRAD: {self.projected_grad}')
 
         # No gradient accumulation support
         assert self.args.gradient_accumulation_steps == 1

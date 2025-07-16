@@ -5,11 +5,11 @@ for i in "${!EDGE_SPARSITIES[@]}"; do
 
 EDGE_SPARSITY=${EDGE_SPARSITIES[i]}
 NODE_SPARSITY=0.68
-ELR=-0.8
-LLR=-0.8
-RELR=-0.8
-RLLR=-0.8
-TOTAL=500
+ELR=0.01
+LLR=0.01
+RELR=0.01
+RLLR=0.01
+TOTAL=300
 WARMUP=75
 
 EXTRA="--disable_node_loss"
@@ -21,7 +21,7 @@ TAG="wo_node_loss"
 VERSION="edge_pruning_mezo"
 
 train_split="train" # "train_80k"
-N_TRAIN=500 # Set to a large value so all of the (150 / 80000) examples are used
+N_TRAIN=300 # Set to a large value so all of the (150 / 80000) examples are used
 N_VAL=150 # The val split size
 
 # You can wrap the following in an sbatch script if you use SLURM

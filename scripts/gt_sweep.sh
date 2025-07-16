@@ -18,7 +18,7 @@ TAG="wo_node_loss"
 # Uncomment this if you want to run with node loss
 # EXTRA=""
 # TAG="w_node_loss"
-VERSION="MAAA"
+VERSION="edge_pruning_mezo"
 
 train_split="train" # "train_80k"
 N_TRAIN=300 # Set to a large value so all of the (150 / 80000) examples are used
@@ -30,8 +30,9 @@ N_VAL=150 # The val split size
 # If you want to always keep embedding nodes, remove the --with_embedding_nodes flag
 # That flag, when set, also models masks over the embedding nodes
 
-WANDB_MODE=disabled python src/layer2/prune/${VERSION}/fpt2_gt.py \
+WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=enabled python src/layer2/prune/${VERSION}/fpt2_gt.py \
     --report_to wandb \
+    --run_name "gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}-$(date +%Y%m%d_%H%M%S)" \
     --do_train \
     --do_eval \
     --dataset_path ./data/datasets/gt/ \

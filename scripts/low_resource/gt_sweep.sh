@@ -48,7 +48,7 @@ WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/
     --reg_edge_learning_rate $RELR \
     --reg_layer_learning_rate $RLLR \
     --max_steps $TOTAL \
-    --warmup_steps 200 \
+    --warmup_steps 10 \
     --eval_steps 64 \
     --save_steps 64 \
     --logging_steps 8 \

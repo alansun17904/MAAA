@@ -30,7 +30,7 @@ N_VAL=150 # The val split size
 # If you want to always keep embedding nodes, remove the --with_embedding_nodes flag
 # That flag, when set, also models masks over the embedding nodes
 
-WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=dryrun python src/layer2/prune/${VERSION}/fpt2_gt.py \
+WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/fpt2_gt.py \
     --report_to wandb \
     --run_name "gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}-$(date +%Y%m%d_%H%M%S)" \
     --do_train \
@@ -39,9 +39,9 @@ WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=dryrun python src/layer2/prune/${VERSION}/
     --train_split $train_split \
     --initialize_from gpt2 \
     --max_seq_length 64 \
-    --per_device_train_batch_size 16 \
+    --per_device_train_batch_size 24 \
     --per_device_eval_batch_size 16 \
-    --gradient_accumulation_steps 2 \
+    --gradient_accumulation_steps 1 \
     --eval_accumulation_steps 16 \
     --edge_learning_rate $ELR \
     --layer_learning_rate $LLR \

@@ -1,0 +1,92 @@
+{
+  "layer_0.ffn": {
+    "layer_0.head_0": 0.4583,
+    "layer_0.head_1": 0.7,
+    "layer_1.ffn": 0.4583,
+    "layer_1.head_0": 0.7,
+    "layer_1.head_1": 0.4583,
+    "layer_2.ffn": 0.7,
+    "layer_2.head_0": 0.4583,
+    "layer_2.head_1": 0.7
+  },
+  "layer_0.head_0": {
+    "layer_0.ffn": 0.4583,
+    "layer_0.head_1": 0.4583,
+    "layer_1.ffn": 0.3,
+    "layer_1.head_0": 0.4583,
+    "layer_1.head_1": 0.3,
+    "layer_2.ffn": 0.4583,
+    "layer_2.head_0": 0.3,
+    "layer_2.head_1": 0.4583
+  },
+  "layer_0.head_1": {
+    "layer_0.ffn": 0.7,
+    "layer_0.head_0": 0.4583,
+    "layer_1.ffn": 0.4583,
+    "layer_1.head_0": 0.7,
+    "layer_1.head_1": 0.4583,
+    "layer_2.ffn": 0.7,
+    "layer_2.head_0": 0.4583,
+    "layer_2.head_1": 0.7
+  },
+  "layer_1.ffn": {
+    "layer_0.ffn": 0.4583,
+    "layer_0.head_0": 0.3,
+    "layer_0.head_1": 0.4583,
+    "layer_1.head_0": 0.4583,
+    "layer_1.head_1": 0.3,
+    "layer_2.ffn": 0.4583,
+    "layer_2.head_0": 0.3,
+    "layer_2.head_1": 0.4583
+  },
+  "layer_1.head_0": {
+    "layer_0.ffn": 0.7,
+    "layer_0.head_0": 0.4583,
+    "layer_0.head_1": 0.7,
+    "layer_1.ffn": 0.4583,
+    "layer_1.head_1": 0.4583,
+    "layer_2.ffn": 0.7,
+    "layer_2.head_0": 0.4583,
+    "layer_2.head_1": 0.7
+  },
+  "layer_1.head_1": {
+    "layer_0.ffn": 0.4583,
+    "layer_0.head_0": 0.3,
+    "layer_0.head_1": 0.4583,
+    "layer_1.ffn": 0.3,
+    "layer_1.head_0": 0.4583,
+    "layer_2.ffn": 0.4583,
+    "layer_2.head_0": 0.3,
+    "layer_2.head_1": 0.4583
+  },
+  "layer_2.ffn": {
+    "layer_0.ffn": 0.7,
+    "layer_0.head_0": 0.4583,
+    "layer_0.head_1": 0.7,
+    "layer_1.ffn": 0.4583,
+    "layer_1.head_0": 0.7,
+    "layer_1.head_1": 0.4583,
+    "layer_2.head_0": 0.4583,
+    "layer_2.head_1": 0.7
+  },
+  "layer_2.head_0": {
+    "layer_0.ffn": 0.4583,
+    "layer_0.head_0": 0.3,
+    "layer_0.head_1": 0.4583,
+    "layer_1.ffn": 0.3,
+    "layer_1.head_0": 0.4583,
+    "layer_1.head_1": 0.3,
+    "layer_2.ffn": 0.4583,
+    "layer_2.head_1": 0.4583
+  },
+  "layer_2.head_1": {
+    "layer_0.ffn": 0.7,
+    "layer_0.head_0": 0.4583,
+    "layer_0.head_1": 0.7,
+    "layer_1.ffn": 0.4583,
+    "layer_1.head_0": 0.7,
+    "layer_1.head_1": 0.4583,
+    "layer_2.ffn": 0.7,
+    "layer_2.head_0": 0.4583
+  }
+}

@@ -104,7 +104,6 @@ def reader_idx_to_name(reader_idx, num_layers, num_heads):
         return f"m{layer_idx}"
 
 def get_mask(log_alpha, training=False, threshold_for_deterministic=None, apply_one=False):
-    return log_alpha
     if training:
         mask = sample_z_from_log_alpha(log_alpha)
     else:

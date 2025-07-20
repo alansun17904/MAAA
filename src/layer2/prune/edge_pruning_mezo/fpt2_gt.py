@@ -58,8 +58,6 @@ from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 
-
-
 import torch.nn as nn
 from torch.optim import AdamW
 
@@ -189,8 +187,7 @@ class FPT2InfoTrainer(MeZOTrainer):
         logits = torch.nn.functional.log_softmax(logits, dim=-1)
 
         kl_loss = nn.functional.kl_div(logits, gpt2_logits, reduction="batchmean", log_target=True)
-        
-        loss = kl_loss + reg_loss
+        loss = kl_loss + abs(reg_loss)
         outputs["loss"] = loss
         outputs["kl_loss"] = kl_loss
         outputs["prob_digits"] = torch.nn.functional.softmax(logits, dim=-1)

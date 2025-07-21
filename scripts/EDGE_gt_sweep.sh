@@ -29,7 +29,7 @@ VERSION="edge_pruning"
 # If you want to always keep embedding nodes, remove the --with_embedding_nodes flag
 # That flag, when set, also models masks over the embedding nodes
 
-WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=run python src/layer2/prune/${VERSION}/fpt2_gt.py \
+WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/fpt2_gt.py \
     --report_to wandb \
     --run_name "gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}-$(date +%Y%m%d_%H%M%S)" \
     --do_train \

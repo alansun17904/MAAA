@@ -60,7 +60,7 @@ WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/
     --num_sparsity_warmup_steps $WARMUP \
     --max_train_samples $N_TRAIN \
     --max_eval_samples $N_VAL \
-    --output_dir ./data/runs/gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}/ \
+    --output_dir ./data/runs/OUR_NON_MEZO_gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}/ \
     --remove_unused_columns false \
     --dataloader_num_workers 0 \
     --warmup_type linear \

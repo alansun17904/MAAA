@@ -66,6 +66,7 @@ WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/
     --warmup_type linear \
     --with_embedding_nodes \
     --seed 1000000 \
+    --trainer "backprop" \
     $EXTRA
 
 done

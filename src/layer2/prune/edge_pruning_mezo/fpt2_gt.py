@@ -187,7 +187,7 @@ class FPT2InfoTrainer(MeZOTrainer):
         logits = torch.nn.functional.log_softmax(logits, dim=-1)
 
         kl_loss = nn.functional.kl_div(logits, gpt2_logits, reduction="batchmean", log_target=True)
-        loss = kl_loss + abs(reg_loss)
+        loss = kl_loss + reg_loss
         outputs["loss"] = loss
         outputs["kl_loss"] = kl_loss
         outputs["prob_digits"] = torch.nn.functional.softmax(logits, dim=-1)

@@ -546,14 +546,8 @@ class MeZOTrainer(Seq2SeqTrainer):
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
 
-                # MeZO added: estimate gradient
-                if args.trainer =='zo':
-                    tr_loss_step = self.zo_step(model, inputs)
-                else:
-                    with self.accelerator.accumulate(model):
-                        tr_loss_step = self.training_step(model, inputs)
-                
-                # End Mezo addition
+                with self.accelerator.accumulate(model):
+                    tr_loss_step = self.training_step(model, inputs)
 
                 if (
                     args.logging_nan_inf_filter
@@ -581,63 +575,53 @@ class MeZOTrainer(Seq2SeqTrainer):
                     # last step in epoch but step is always smaller than gradient_accumulation_steps
                     is_last_step_and_steps_less_than_grad_acc
                 ):
-                    # MeZO added: update model with the estimated gradient
-                    # not sure if the first if statement in the following else block should be 
-                    # included in MeZO block
-                    if args.trainer == "zo":
-                        self.zo_update(model)
-                    else:
-                    
-                        # the `or` condition of `is_last_step_and_steps_less_than_grad_acc` is not covered
-                        # in accelerate. So, explicitly enable sync gradients to True in that case.
-                        if is_last_step_and_steps_less_than_grad_acc:
-                            self.accelerator.gradient_state._set_sync_gradients(True)
+                    # the `or` condition of `is_last_step_and_steps_less_than_grad_acc` is not covered
+                    # in accelerate. So, explicitly enable sync gradients to True in that case.
+                    if is_last_step_and_steps_less_than_grad_acc:
+                        self.accelerator.gradient_state._set_sync_gradients(True)
 
-                        # Gradient clipping
-                        if args.max_grad_norm is not None and args.max_grad_norm > 0:
-                            # deepspeed does its own clipping
+                    # Gradient clipping
+                    if args.max_grad_norm is not None and args.max_grad_norm > 0:
+                        # deepspeed does its own clipping
 
-                            if is_sagemaker_mp_enabled() and args.fp16:
-                                _grad_norm = self.optimizer.clip_master_grads(args.max_grad_norm)
-                            elif self.use_apex:
-                                # Revert to normal clipping otherwise, handling Apex or full precision
-                                _grad_norm = nn.utils.clip_grad_norm_(
-                                    amp.master_params(self.optimizer),
-                                    args.max_grad_norm,
-                                )
-                            else:
-                                _grad_norm = self.accelerator.clip_grad_norm_(
-                                    model.parameters(),
-                                    args.max_grad_norm,
-                                )
+                        if is_sagemaker_mp_enabled() and args.fp16:
+                            _grad_norm = self.optimizer.clip_master_grads(args.max_grad_norm)
+                        elif self.use_apex:
+                            # Revert to normal clipping otherwise, handling Apex or full precision
+                            _grad_norm = nn.utils.clip_grad_norm_(
+                                amp.master_params(self.optimizer),
+                                args.max_grad_norm,
+                            )
+                        else:
+                            _grad_norm = self.accelerator.clip_grad_norm_(
+                                model.parameters(),
+                                args.max_grad_norm,
+                            )
 
-                            if (
-                                is_accelerate_available()
-                                and self.accelerator.distributed_type == DistributedType.DEEPSPEED
-                            ):
-                                grad_norm = model.get_global_grad_norm()
-                                # In some cases the grad norm may not return a float
-                                if hasattr(grad_norm, "item"):
-                                    grad_norm = grad_norm.item()
-                            else:
-                                grad_norm = _grad_norm
+                        if (
+                            is_accelerate_available()
+                            and self.accelerator.distributed_type == DistributedType.DEEPSPEED
+                        ):
+                            grad_norm = model.get_global_grad_norm()
+                            # In some cases the grad norm may not return a float
+                            if hasattr(grad_norm, "item"):
+                                grad_norm = grad_norm.item()
+                        else:
+                            grad_norm = _grad_norm
 
-                        self.control = self.callback_handler.on_pre_optimizer_step(args, self.state, self.control)
+                    self.control = self.callback_handler.on_pre_optimizer_step(args, self.state, self.control)
 
-                        self.optimizer.step()
+                    self.optimizer.step()
 
-                        self.control = self.callback_handler.on_optimizer_step(args, self.state, self.control)
+                    self.control = self.callback_handler.on_optimizer_step(args, self.state, self.control)
 
-                        optimizer_was_run = not self.accelerator.optimizer_step_was_skipped
-                        if optimizer_was_run:
-                            # Delay optimizer scheduling until metrics are generated
-                            if not isinstance(self.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                                self.lr_scheduler.step()
+                    optimizer_was_run = not self.accelerator.optimizer_step_was_skipped
+                    if optimizer_was_run:
+                        # Delay optimizer scheduling until metrics are generated
+                        if not isinstance(self.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                            self.lr_scheduler.step()
 
-                        model.zero_grad()
-
-                    # End Mezo addition
-
+                    model.zero_grad()
                     self.state.global_step += 1
                     self.state.epoch = epoch + (step + 1 + steps_skipped) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)

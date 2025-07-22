@@ -1,0 +1,20 @@
+{
+  "layer_0.head_0_Q": 1,
+  "layer_0.head_0_K": 0,
+  "layer_0.head_0_V": 1,
+  "layer_0.head_0_O": 1,
+  "layer_0.ffn_0_in": 1,
+  "layer_0.ffn_0_out": 0,
+  "layer_1.head_1_Q": 0,
+  "layer_1.head_1_K": 1,
+  "layer_1.head_1_V": 1,
+  "layer_1.head_1_O": 0,
+  "layer_1.ffn_1_in": 0,
+  "layer_1.ffn_1_out": 1,
+  "layer_2.head_2_Q": 1,
+  "layer_2.head_2_K": 1,
+  "layer_2.head_2_V": 0,
+  "layer_2.head_2_O": 1,
+  "layer_2.ffn_2_in": 1,
+  "layer_2.ffn_2_out": 0
+}

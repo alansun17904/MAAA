@@ -200,10 +200,10 @@ class FPT2InfoTrainer(MeZOTrainer):
             "KL Loss": kl_loss
             })
         
-        print(f"Reg Loss: {reg_loss}")
-        print(f"Edge Loss: {reg_edge_loss}")
-        print(f"Node Loss: {reg_layer_loss}")
-        print(f"KL Loss: {kl_loss}")
+        # print(f"Reg Loss: {reg_loss}")
+        # print(f"Edge Loss: {reg_edge_loss}")
+        # print(f"Node Loss: {reg_layer_loss}")
+        # print(f"KL Loss: {kl_loss}")
 
 
 

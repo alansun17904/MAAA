@@ -545,7 +545,7 @@ class MeZOTrainer(Seq2SeqTrainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-
+                # MARK: MeZO 1
                 # MeZO added: estimate gradient
                 if args.trainer =='zo':
                     tr_loss_step = self.zo_step(model, inputs)
@@ -584,8 +584,10 @@ class MeZOTrainer(Seq2SeqTrainer):
                     # MeZO added: update model with the estimated gradient
                     # not sure if the first if statement in the following else block should be 
                     # included in MeZO block
+                    # MARK: MeZO 2
                     if args.trainer == "zo":
                         self.zo_update(model)
+                        model.zero_grad() # DEBUG ADDITION
                     else:
                     
                         # the `or` condition of `is_last_step_and_steps_less_than_grad_acc` is not covered

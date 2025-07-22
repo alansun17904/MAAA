@@ -139,7 +139,8 @@ class FPT2InfoTrainer(MeZOTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, mezo = False):
         if mezo:
-            print('MEZO:')
+            # print('MEZO:')
+            pass
 
         if self.digits is None:
             self.digits = torch.LongTensor([self.tokenizer.encode("{:02d}".format(i))[0] for i in range(100)]).to(self.args.device)
@@ -209,7 +210,8 @@ class FPT2InfoTrainer(MeZOTrainer):
 
         
         if mezo:
-            print('END MEZO')
+            # print('END MEZO')
+            pass
         loss = kl_loss + reg_loss
         outputs["loss"] = loss
         outputs["kl_loss"] = kl_loss

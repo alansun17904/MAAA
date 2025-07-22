@@ -137,7 +137,10 @@ class FPT2InfoTrainer(MeZOTrainer):
         else:
             return self.target_layer_sparsity
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, mezo = False):
+        if mezo:
+            print('MEZO:')
+
         if self.digits is None:
             self.digits = torch.LongTensor([self.tokenizer.encode("{:02d}".format(i))[0] for i in range(100)]).to(self.args.device)
 
@@ -171,7 +174,8 @@ class FPT2InfoTrainer(MeZOTrainer):
             **inputs, 
             target_edge_sparsity=self.get_current_edge_target_sparsity(self.state.global_step),
             target_node_sparsity=self.get_current_layer_target_sparsity(self.state.global_step),
-            corr_x=corr_x
+            corr_x=corr_x,
+            mezo=mezo
         )
         
         reg_edge_loss = outputs["edge_loss"]
@@ -188,13 +192,24 @@ class FPT2InfoTrainer(MeZOTrainer):
         logits = torch.nn.functional.log_softmax(logits, dim=-1)
 
         kl_loss = nn.functional.kl_div(logits, gpt2_logits, reduction="batchmean", log_target=True)
-
+        
         wandb.log({
             "Reg Loss" : reg_loss, 
             "Edge Loss" : reg_edge_loss,
             "Node Loss": reg_layer_loss,
             "KL Loss": kl_loss
             })
+        
+        print(f"Reg Loss: {reg_loss}")
+        print(f"Edge Loss: {reg_edge_loss}")
+        print(f"Node Loss: {reg_layer_loss}")
+        print(f"KL Loss: {kl_loss}")
+
+
+
+        
+        if mezo:
+            print('END MEZO')
         loss = kl_loss + reg_loss
         outputs["loss"] = loss
         outputs["kl_loss"] = kl_loss

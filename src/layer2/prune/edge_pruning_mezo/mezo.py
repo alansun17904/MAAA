@@ -547,11 +547,13 @@ class MeZOTrainer(Seq2SeqTrainer):
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
                 # MARK: MeZO 1
                 # MeZO added: estimate gradient
-                if args.trainer =='zo':
-                    tr_loss_step = self.zo_step(model, inputs)
-                else:
+                if args.trainer != 'zo':
                     with self.accelerator.accumulate(model):
                         tr_loss_step = self.training_step(model, inputs)
+                    print(f'BACKPROP LOSS STEP: {tr_loss_step}')
+                if args.trainer =='zo' or args.trainer == 'zo_debug':
+                    tr_loss_step = self.zo_step(model, inputs)
+                    print(f'MEZO LOSS STEP: {tr_loss_step}') # DEBUG ADDITION
                 
                 # End Mezo addition
 
@@ -587,7 +589,6 @@ class MeZOTrainer(Seq2SeqTrainer):
                     # MARK: MeZO 2
                     if args.trainer == "zo":
                         self.zo_update(model)
-                        model.zero_grad() # DEBUG ADDITION
                     else:
                     
                         # the `or` condition of `is_last_step_and_steps_less_than_grad_acc` is not covered

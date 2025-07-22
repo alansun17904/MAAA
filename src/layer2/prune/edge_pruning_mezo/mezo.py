@@ -843,7 +843,6 @@ class MeZOTrainer(Seq2SeqTrainer):
         loss2 = self.zo_forward(model, inputs)
 
         self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
-        print(f'PROJECTED_GRAD: {self.projected_grad}')
 
         # No gradient accumulation support
         assert self.args.gradient_accumulation_steps == 1

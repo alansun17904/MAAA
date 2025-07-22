@@ -27,6 +27,7 @@ import json
 import warnings
 from dataclasses import dataclass, field
 from typing import Optional
+import wandb
 
 import datasets
 import evaluate
@@ -187,6 +188,13 @@ class FPT2InfoTrainer(MeZOTrainer):
         logits = torch.nn.functional.log_softmax(logits, dim=-1)
 
         kl_loss = nn.functional.kl_div(logits, gpt2_logits, reduction="batchmean", log_target=True)
+
+        wandb.log({
+            "Reg Loss" : reg_loss, 
+            "Edge Loss" : reg_edge_loss,
+            "Node Loss": reg_layer_loss,
+            "KL Loss": kl_loss
+            })
         loss = kl_loss + reg_loss
         outputs["loss"] = loss
         outputs["kl_loss"] = kl_loss

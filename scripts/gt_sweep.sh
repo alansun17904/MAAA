@@ -21,7 +21,7 @@ TAG="wo_node_loss"
 VERSION="edge_pruning_mezo"
 
 train_split="train" # "train_80k"
-N_TRAIN=500 # Set to a large value so all of the (150 / 80000) examples are used
+N_TRAIN=100000000 # Set to a large value so all of the (150 / 80000) examples are used
 N_VAL=150 # The val split size
 
 # You can wrap the following in an sbatch script if you use SLURM
@@ -39,8 +39,8 @@ WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/p
     --train_split $train_split \
     --initialize_from gpt2 \
     --max_seq_length 64 \
-    --per_device_train_batch_size 32 \
-    --per_device_eval_batch_size 16 \
+    --per_device_train_batch_size 64 \
+    --per_device_eval_batch_size 32 \
     --gradient_accumulation_steps 1 \
     --eval_accumulation_steps 16 \
     --edge_learning_rate $ELR \

@@ -869,6 +869,8 @@ class MeZOTrainer(Seq2SeqTrainer):
         torch.manual_seed(self.zo_random_seed)     
         print(f'WEIGHT DECAY: {args.weight_decay}')
 
+        print(f'TEST LR: {self.lr_scheduler.get_last_lr()}')
+
         for name, param in self.named_parameters_to_optim:
             # Resample z
             z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)

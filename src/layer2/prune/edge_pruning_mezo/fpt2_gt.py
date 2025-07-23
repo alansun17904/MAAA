@@ -517,6 +517,7 @@ def get_optimizers(model, edges_lr, layers_lr, reg_edges_lr, reg_layers_lr, num_
             optimizer_2_group.append(p)
         elif ('sparsity_lambda_node' in n) and (not disable_node_loss):
             optimizer_4_group.append(p)
+            print("NODE ENABLED")
     
     optimizer = AdamW(
         [

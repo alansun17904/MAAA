@@ -1398,7 +1398,9 @@ class FPT2Model(FPT2PreTrainedModel):
             "Lambda Node 1" : self.sparsity_lambda_nodes_1.reshape([]), 
             "Lambda Node 2" : self.sparsity_lambda_nodes_2.reshape([]),
             "Lambda Edge 1:": self.sparsity_lambda_edges_1.reshape([]),
-            "Lambda Edge 2:": self.sparsity_lambda_edges_2.reshape([])
+            "Lambda Edge 2:": self.sparsity_lambda_edges_2.reshape([]),
+            "Model Edge Sparsity" : model_edge_sparsity,
+            "Model Node Sparsity" : model_node_sparsity,
             })
 
         # print(

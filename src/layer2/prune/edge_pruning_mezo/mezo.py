@@ -880,10 +880,10 @@ class MeZOTrainer(Seq2SeqTrainer):
                 param.data = param.data + self.zo_get_lr(2) * (self.projected_grad * z)
                 # print(f'LAMBDA LR: {self.zo_get_lr(2)}')
             elif "bias" not in name and "layer_norm" not in name and "layernorm" not in name: # what is that --> should we be fixign this?
-                param.data = param.data - self.self.zo_get_lr(1) * (self.projected_grad * z + args.weight_decay * param.data)
+                param.data = param.data - self.zo_get_lr(1) * (self.projected_grad * z + args.weight_decay * param.data)
                 # print(f'Bias LR: {self.zo_get_lr(1)}')
             else:
-                param.data = param.data - self.self.zo_get_lr(1) * (self.projected_grad * z) # where does self._get_learning_rate() interface w/ the multiple LRs
+                param.data = param.data - self.zo_get_lr(1) * (self.projected_grad * z) # where does self._get_learning_rate() interface w/ the multiple LRs
                 # print(f'Other LR: {self.zo_get_lr(1)}')
 
         self.lr_scheduler.step()

@@ -5,12 +5,12 @@ for i in "${!EDGE_SPARSITIES[@]}"; do
 
 EDGE_SPARSITY=${EDGE_SPARSITIES[i]}
 NODE_SPARSITY=0.68
-ELR=0.08
-LLR=0.08
-RELR=0.08
-RLLR=0.08
-TOTAL=500
-WARMUP=75
+ELR=0.8
+LLR=0.8
+RELR=0.8
+RLLR=0.8
+TOTAL=3000
+WARMUP=500
 
 EXTRA="--disable_node_loss"
 TAG="wo_node_loss"
@@ -39,8 +39,8 @@ WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/p
     --train_split $train_split \
     --initialize_from gpt2 \
     --max_seq_length 64 \
-    --per_device_train_batch_size 64 \
-    --per_device_eval_batch_size 32 \
+    --per_device_train_batch_size 96 \
+    --per_device_eval_batch_size 48 \
     --gradient_accumulation_steps 1 \
     --eval_accumulation_steps 16 \
     --edge_learning_rate $ELR \

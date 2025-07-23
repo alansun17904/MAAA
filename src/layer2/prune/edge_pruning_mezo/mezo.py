@@ -551,11 +551,9 @@ class MeZOTrainer(Seq2SeqTrainer):
                 if args.trainer != 'zo':
                     with self.accelerator.accumulate(model):
                         tr_loss_step = self.training_step(model, inputs)
-                    print(f'BACKPROP LOSS STEP: {tr_loss_step}') # DEBUG ADDITION
                     wandb.log({"Backprop Loss Step" : tr_loss_step}) # DEBUG ADDITION
                 if args.trainer =='zo' or args.trainer == 'zo_debug':
                     tr_loss_step = self.zo_step(model, inputs)
-                    print(f'MEZO LOSS STEP: {tr_loss_step}') # DEBUG ADDITION
                     wandb.log({"MEZO Loss Step" : tr_loss_step}) # DEBUG ADDITION
                 
                     

@@ -869,14 +869,17 @@ class MeZOTrainer(Seq2SeqTrainer):
 
         # Reset the random seed for sampling zs
         torch.manual_seed(self.zo_random_seed)     
+        print(f'WEIGHT DECAY: {args.weight_decay}')
 
         for name, param in self.named_parameters_to_optim:
             # Resample z
             z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
-            if "bias" not in name and "layer_norm" not in name and "layernorm" not in name:
+            if 'sparsity_lambda_edge' in name or 'sparsity_lambda_node' in name: # implement no node loss
+                param.data = param.data + self._get_learning_rate() * (self.projected_grad * z)
+            elif "bias" not in name and "layer_norm" not in name and "layernorm" not in name: # what is that --> should we be fixign this?
                 param.data = param.data - self._get_learning_rate() * (self.projected_grad * z + args.weight_decay * param.data)
             else:
-                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z)
+                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z) # where does self._get_learning_rate() interface w/ the multiple LRs
 
         self.lr_scheduler.step()
     

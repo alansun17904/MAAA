@@ -857,6 +857,9 @@ class MeZOTrainer(Seq2SeqTrainer):
         self.zo_perturb_parameters(scaling_factor=1)
         
         return loss1
+    
+    def zo_get_lr(self, group):
+        return self.lr_scheduler.get_last_lr()[group-1]
 
 
     def zo_update(self, model):
@@ -869,20 +872,19 @@ class MeZOTrainer(Seq2SeqTrainer):
         torch.manual_seed(self.zo_random_seed)     
         print(f'WEIGHT DECAY: {args.weight_decay}')
 
-        print(f'TEST LR: {self.lr_scheduler.get_last_lr()}')
 
         for name, param in self.named_parameters_to_optim:
             # Resample z
             z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
             if 'sparsity_lambda_edge' in name: # or 'sparsity_lambda_node' in name: # implement no node loss
-                param.data = param.data + self._get_learning_rate() * (self.projected_grad * z)
-                print(f'LAMBDA LR: {self._get_learning_rate()}')
+                param.data = param.data + self.zo_get_lr(2) * (self.projected_grad * z)
+                print(f'LAMBDA LR: {self.zo_get_lr(2)}')
             elif "bias" not in name and "layer_norm" not in name and "layernorm" not in name: # what is that --> should we be fixign this?
-                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z + args.weight_decay * param.data)
-                print(f'Bias LR: {self._get_learning_rate()}')
+                param.data = param.data - self.self.zo_get_lr(1) * (self.projected_grad * z + args.weight_decay * param.data)
+                print(f'Bias LR: {self.zo_get_lr(1)}')
             else:
-                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z) # where does self._get_learning_rate() interface w/ the multiple LRs
-                print(f'Other LR: {self._get_learning_rate()}')
+                param.data = param.data - self.self.zo_get_lr(1) * (self.projected_grad * z) # where does self._get_learning_rate() interface w/ the multiple LRs
+                print(f'Other LR: {self.zo_get_lr(1)}')
 
         self.lr_scheduler.step()
     

@@ -5,10 +5,10 @@ for i in "${!EDGE_SPARSITIES[@]}"; do
 
 EDGE_SPARSITY=${EDGE_SPARSITIES[i]}
 NODE_SPARSITY=0.68
-ELR=0.8
-LLR=0.8
-RELR=0.8
-RLLR=0.8
+ELR=2
+LLR=2
+RELR=2
+RLLR=2
 TOTAL=3000
 WARMUP=500
 
@@ -48,7 +48,7 @@ WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/p
     --reg_edge_learning_rate $RELR \
     --reg_layer_learning_rate $RLLR \
     --max_steps $TOTAL \
-    --warmup_steps 200 \
+    --warmup_steps 300 \
     --eval_steps 64 \
     --save_steps 64 \
     --logging_steps 8 \

@@ -859,8 +859,7 @@ class MeZOTrainer(Seq2SeqTrainer):
         return loss1
     
     def zo_get_lr(self, group):
-        return self.optimizer.param_groups[group]["lr"]
-        # return self.lr_scheduler.get_last_lr()[group-1]
+        return self.lr_scheduler.get_last_lr()[group-1]
 
 
     def zo_update(self, model):
@@ -889,7 +888,6 @@ class MeZOTrainer(Seq2SeqTrainer):
                 param.data = param.data - self.zo_get_lr(1) * (self.projected_grad * z) # where does self._get_learning_rate() interface w/ the multiple LRs
                 # print(f'Other LR: {self.zo_get_lr(1)}')
 
-        self.optimizer.step()
         self.lr_scheduler.step()
     
 @dataclass

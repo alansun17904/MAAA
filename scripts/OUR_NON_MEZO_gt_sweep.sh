@@ -1,5 +1,6 @@
 # EDGE_SPARSITIES=(0.95 0.955 0.96 0.965 0.97 0.975 0.98 0.985 0.99 0.995 1.0 1.01 1.02 1.05 1.1)
-EDGE_SPARSITIES=(0.95 0.955 0.96 0.965 0.97 0.975 0.98 0.985 0.99 0.995 1.0)
+EDGE_SPARSITIES=(0.95)
+
 for i in "${!EDGE_SPARSITIES[@]}"; do
 
 EDGE_SPARSITY=${EDGE_SPARSITIES[i]}
@@ -8,8 +9,8 @@ ELR=0.8
 LLR=0.8
 RELR=0.8
 RLLR=0.8
-TOTAL=3000
-WARMUP=2500
+TOTAL=500
+WARMUP=75
 
 EXTRA="--disable_node_loss"
 TAG="wo_node_loss"
@@ -17,11 +18,11 @@ TAG="wo_node_loss"
 # Uncomment this if you want to run with node loss
 # EXTRA=""
 # TAG="w_node_loss"
+VERSION="edge_pruning_mezo"
 
 train_split="train" # "train_80k"
-N_TRAIN=1000000 # Set to a large value so all of the (150 / 80000) examples are used
+N_TRAIN=500 # Set to a large value so all of the (150 / 80000) examples are used
 N_VAL=150 # The val split size
-VERSION="edge_pruning"
 
 # You can wrap the following in an sbatch script if you use SLURM
 # Activate your environment etc
@@ -29,9 +30,9 @@ VERSION="edge_pruning"
 # If you want to always keep embedding nodes, remove the --with_embedding_nodes flag
 # That flag, when set, also models masks over the embedding nodes
 
-WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/fpt2_gt.py \
+WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/nomezo_fpt2_gt.py \
     --report_to wandb \
-    --run_name "gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}-$(date +%Y%m%d_%H%M%S)" \
+    --run_name "OUR_NON_MEZO_gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}-$(date +%Y%m%d_%H%M%S)" \
     --do_train \
     --do_eval \
     --dataset_path ./data/datasets/gt/ \
@@ -48,7 +49,6 @@ WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/
     --reg_layer_learning_rate $RLLR \
     --max_steps $TOTAL \
     --warmup_steps 200 \
-    --evaluation_strategy steps \
     --eval_steps 64 \
     --save_steps 64 \
     --logging_steps 8 \
@@ -60,11 +60,13 @@ WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/
     --num_sparsity_warmup_steps $WARMUP \
     --max_train_samples $N_TRAIN \
     --max_eval_samples $N_VAL \
-    --output_dir ./data/runs/gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}/ \
+    --output_dir ./data/runs/OUR_NON_MEZO_gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}/ \
     --remove_unused_columns false \
     --dataloader_num_workers 0 \
     --warmup_type linear \
     --with_embedding_nodes \
+    --trainer zo \
+    --seed 1000000 \
     $EXTRA
 
 done

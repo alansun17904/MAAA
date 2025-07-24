@@ -60,7 +60,7 @@ import sys
 sys.path.append(
     os.path.join(
         os.getcwd(),
-        "src/modeling/"
+        "src/layer2/modeling/"
     )
 )
 from transformers import AutoTokenizer

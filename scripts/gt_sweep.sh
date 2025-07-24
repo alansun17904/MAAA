@@ -5,11 +5,11 @@ for i in "${!EDGE_SPARSITIES[@]}"; do
 
 EDGE_SPARSITY=${EDGE_SPARSITIES[i]}
 NODE_SPARSITY=0.68
-ELR=0.8
-LLR=0.8
-RELR=0.8
-RLLR=0.8
-TOTAL=325
+ELR=1
+LLR=1
+RELR=0.5
+RLLR=0.5
+TOTAL=500
 WARMUP=75
 
 EXTRA="--disable_node_loss"
@@ -18,10 +18,10 @@ TAG="wo_node_loss"
 # Uncomment this if you want to run with node loss
 # EXTRA=""
 # TAG="w_node_loss"
-VERSION="MAAA"
+VERSION="edge_pruning_mezo"
 
 train_split="train" # "train_80k"
-N_TRAIN=300 # Set to a large value so all of the (150 / 80000) examples are used
+N_TRAIN=500 # Set to a large value so all of the (150 / 80000) examples are used
 N_VAL=150 # The val split size
 
 # You can wrap the following in an sbatch script if you use SLURM
@@ -30,8 +30,9 @@ N_VAL=150 # The val split size
 # If you want to always keep embedding nodes, remove the --with_embedding_nodes flag
 # That flag, when set, also models masks over the embedding nodes
 
-WANDB_MODE=disabled python src/layer2/prune/${VERSION}/fpt2_gt.py \
+WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/fpt2_gt.py \
     --report_to wandb \
+    --run_name "gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}-$(date +%Y%m%d_%H%M%S)" \
     --do_train \
     --do_eval \
     --dataset_path ./data/datasets/gt/ \
@@ -65,6 +66,8 @@ WANDB_MODE=disabled python src/layer2/prune/${VERSION}/fpt2_gt.py \
     --warmup_type linear \
     --with_embedding_nodes \
     --trainer zo \
+    --seed 1000000 \
+    --zo_eps 0.00001
     $EXTRA
 
 done

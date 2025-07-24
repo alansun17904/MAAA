@@ -1,5 +1,6 @@
 # EDGE_SPARSITIES=(0.95 0.955 0.96 0.965 0.97 0.975 0.98 0.985 0.99 0.995 1.0 1.01 1.02 1.05 1.1)
-EDGE_SPARSITIES=(0.95 0.955 0.96 0.965 0.97 0.975 0.98 0.985 0.99 0.995 1.0)
+EDGE_SPARSITIES=(0.95)
+
 for i in "${!EDGE_SPARSITIES[@]}"; do
 
 EDGE_SPARSITY=${EDGE_SPARSITIES[i]}
@@ -8,8 +9,8 @@ ELR=0.8
 LLR=0.8
 RELR=0.8
 RLLR=0.8
-TOTAL=3000
-WARMUP=2500
+TOTAL=300
+WARMUP=75
 
 EXTRA="--disable_node_loss"
 TAG="wo_node_loss"
@@ -17,11 +18,11 @@ TAG="wo_node_loss"
 # Uncomment this if you want to run with node loss
 # EXTRA=""
 # TAG="w_node_loss"
+VERSION="edge_pruning"
 
 train_split="train" # "train_80k"
-N_TRAIN=1000000 # Set to a large value so all of the (150 / 80000) examples are used
+N_TRAIN=300 # Set to a large value so all of the (150 / 80000) examples are used
 N_VAL=150 # The val split size
-VERSION="edge_pruning"
 
 # You can wrap the following in an sbatch script if you use SLURM
 # Activate your environment etc
@@ -38,9 +39,9 @@ WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/
     --train_split $train_split \
     --initialize_from gpt2 \
     --max_seq_length 64 \
-    --per_device_train_batch_size 32 \
-    --per_device_eval_batch_size 16 \
-    --gradient_accumulation_steps 1 \
+    --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 4 \
+    --gradient_accumulation_steps 8 \
     --eval_accumulation_steps 16 \
     --edge_learning_rate $ELR \
     --layer_learning_rate $LLR \
@@ -48,7 +49,6 @@ WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/
     --reg_layer_learning_rate $RLLR \
     --max_steps $TOTAL \
     --warmup_steps 200 \
-    --evaluation_strategy steps \
     --eval_steps 64 \
     --save_steps 64 \
     --logging_steps 8 \

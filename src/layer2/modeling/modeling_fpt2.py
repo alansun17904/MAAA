@@ -20,6 +20,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
+import wandb
 
 import torch
 import torch.nn as nn
@@ -1393,6 +1394,24 @@ class FPT2Model(FPT2PreTrainedModel):
                 model_node_sparsity - target_node_sparsity
             )**2
         
+        wandb.log({
+            "Lambda Node 1" : self.sparsity_lambda_nodes_1.reshape([]), 
+            "Lambda Node 2" : self.sparsity_lambda_nodes_2.reshape([]),
+            "Lambda Edge 1:": self.sparsity_lambda_edges_1.reshape([]),
+            "Lambda Edge 2:": self.sparsity_lambda_edges_2.reshape([]),
+            "Model Edge Sparsity" : model_edge_sparsity,
+            "Model Node Sparsity" : model_node_sparsity,
+            })
+
+        # print(
+        #     f"Lambda Node 1: {self.sparsity_lambda_nodes_1.reshape([])}\n"
+        #     f"Lambda Node 2: {self.sparsity_lambda_nodes_2.reshape([])}\n"
+        #     f"Lambda Edge 1: {self.sparsity_lambda_edges_1.reshape([])}\n"
+        #     f"Lambda Edge 2: {self.sparsity_lambda_edges_2.reshape([])}"
+        # )
+        
+
+
         # Add last hidden state
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)

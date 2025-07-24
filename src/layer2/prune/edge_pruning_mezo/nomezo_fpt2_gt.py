@@ -16,6 +16,7 @@
 """ Finetuning the library models for sequence classification on GLUE."""
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
+
 import logging as logging_py
 import os
 import torch
@@ -56,10 +57,11 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
+
 import torch.nn as nn
 from torch.optim import AdamW
 
-from mezo import MeZOTrainer, MeZOTrainingArguments
+from not_mezo import MeZOTrainer, MeZOTrainingArguments
 
 import sys
 sys.path.append(
@@ -68,10 +70,13 @@ sys.path.append(
         "src/layer2/modeling/"
     )
 )   # Very hacky but the imports are annoying otherwise
+
 from modeling_fpt2 import FPT2LMHeadModel
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
 logger = logging_py.getLogger(__name__)
+
+
 
 class FPT2InfoTrainer(MeZOTrainer):
     def __init__(self, *args, **kwargs):
@@ -91,8 +96,13 @@ class FPT2InfoTrainer(MeZOTrainer):
         self.warmup_type = kwargs.pop('warmup_type', 'linear')
         self.gpt2_model = kwargs.pop('gpt2_model', None)
         self.skip_layer_loss_if_higher_sparsity = kwargs.pop('skip_layer_loss_if_higher_sparsity', False)
+        
+        self.digits = None
         self.device_count = torch.cuda.device_count()
+                
         super().__init__(*args, **kwargs)
+        
+        self.tokenizer = kwargs.pop('tokenizer', None)
 
     def get_current_edge_target_sparsity(self, global_step):
         if global_step < self.num_edge_sparsity_warmup_steps:
@@ -127,9 +137,11 @@ class FPT2InfoTrainer(MeZOTrainer):
             return self.target_layer_sparsity
 
     def compute_loss(self, model, inputs, return_outputs=False):
-        start_idxes = inputs.pop("start_idxes")
-        end_idxes = inputs.pop("end_idxes")
-        _ = inputs.pop("labels")
+        if self.digits is None:
+            self.digits = torch.LongTensor([self.tokenizer.encode("{:02d}".format(i))[0] for i in range(100)]).to(self.args.device)
+
+        indices = inputs.pop("indices", None)
+        digits_ = inputs.pop("digits", None)
         corr_input_ids = inputs.pop("corr_input_ids")
         input_ids = inputs.pop("input_ids")
         
@@ -137,14 +149,17 @@ class FPT2InfoTrainer(MeZOTrainer):
         
         with torch.no_grad():
             # First get the logits from the GPT-2 model
-            logits_gpt2 = self.gpt2_model(input_ids=input_ids, **inputs).logits
+            gpt2_logits = self.gpt2_model(input_ids=input_ids, **inputs).logits
+            gpt2_logits = torch.gather(
+                gpt2_logits, 
+                1, 
+                indices.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, gpt2_logits.shape[-1])
+            ).squeeze()
+            gpt2_logits = torch.gather(gpt2_logits, 1, self.digits.unsqueeze(0).repeat(gpt2_logits.shape[0], 1))
+            gpt2_logits = torch.nn.functional.log_softmax(gpt2_logits, dim=-1)
             
             # Now run the corrupted inputs through it, and retain the activations
-            corr_x = self.gpt2_model(
-                input_ids=corr_input_ids, 
-                **inputs,
-                output_writer_states=True
-            ).writer_states
+            corr_x = self.gpt2_model(input_ids=corr_input_ids, **inputs, output_writer_states=True).writer_states
 
             # Reshape corr_x in case we have distributed training
             tgt_shape = (-1, bsz // self.device_count, *corr_x.shape[2:])
@@ -164,27 +179,37 @@ class FPT2InfoTrainer(MeZOTrainer):
         else:
             reg_layer_loss = outputs["node_loss"]
         reg_loss = reg_edge_loss + reg_layer_loss
-        logits = outputs["logits"]
         
-        kl_loss = 0
-        for i in range(logits.shape[0]):
-            logits_i = nn.functional.log_softmax(logits[i, start_idxes[i]:end_idxes[i]], dim=-1)
-            logits_gpt2_i = nn.functional.log_softmax(logits_gpt2[i, start_idxes[i]:end_idxes[i]], dim=-1)
-            
-            kl_loss_component = nn.functional.kl_div(logits_i, logits_gpt2_i, reduction='batchmean', log_target=True)
-            kl_loss += kl_loss_component
-        kl_loss /= logits.shape[0]
-        
+        ## Restricting to 01-99 for now
+        # Only the last position
+        logits = torch.gather(outputs.logits, 1, indices.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, outputs.logits.shape[-1])).squeeze()
+        logits = torch.gather(logits, 1, self.digits.unsqueeze(0).repeat(logits.shape[0], 1))
+        logits = torch.nn.functional.log_softmax(logits, dim=-1)
+
+        kl_loss = nn.functional.kl_div(logits, gpt2_logits, reduction="batchmean", log_target=True)
         loss = kl_loss + reg_loss
         outputs["loss"] = loss
         outputs["kl_loss"] = kl_loss
+        outputs["prob_digits"] = torch.nn.functional.softmax(logits, dim=-1)
+        outputs["digits"] = digits_
 
         return (loss, outputs) if return_outputs else loss
+    
+
+    
+
+    
+    
+    
+
+
+
+
 
 @dataclass
 class DataTrainingArguments:
     dataset_path: Optional[str] = field(
-        default="./data/datasets/example_custom.jsonl",
+        default="./data/datasets/gt/",
         metadata={"help": "The path to the directory with the JSON files of the task."},
     )
     train_split: Optional[str] = field(
@@ -222,7 +247,7 @@ class DataTrainingArguments:
         metadata={"help": "The initial edge sparsity of the model."}
     )
     target_edge_sparsity: Optional[float] = field(
-        default=0.97,
+        default=0.98,
         metadata={"help": "The target edge sparsity of the model."}
     )
     start_layer_sparsity: Optional[float] = field(
@@ -230,7 +255,7 @@ class DataTrainingArguments:
         metadata={"help": "The initial layer sparsity of the model."}
     )
     target_layer_sparsity: Optional[float] = field(
-        default=0.72,
+        default=0.68,
         metadata={"help": "The target layer sparsity of the model."}
     )
     stop_optimizing_layer_if_higher_sparsity: Optional[bool] = field(
@@ -321,6 +346,8 @@ class ModelArguments:
         metadata={"help": "The model to initialize from."},
     )
 
+
+
 def format_instance(instance, split):
     if isinstance(instance, dict) and "min_steps" in instance:
         return {
@@ -336,23 +363,7 @@ def format_instance(instance, split):
 
 def load_datasets(dataset_path, max_train_samples, max_eval_samples, train_split="train"):
     if os.path.exists(dataset_path):
-        if dataset_path.endswith(".jsonl") or dataset_path.endswith(".json"):
-            dataset = load_dataset("json", data_files=dataset_path)["train"]
-            if "split" in dataset:
-                # Filter into train and eval
-                dataset = DatasetDict({
-                    "train": dataset.filter(lambda x: x["split"] == "train"),
-                    "validation": dataset.filter(lambda x: x["split"] == "validation"),
-                })
-            else:
-                logger.warning("No split information found in the dataset. Using the whole dataset for both train and eval.")
-                # Use the whole dataset for both train and eval
-                dataset = DatasetDict({
-                    "train": dataset,
-                    "validation": dataset,
-                })
-        else:
-            dataset = load_from_disk(dataset_path)
+        dataset = load_from_disk(dataset_path)
     else:
         dataset = load_dataset(dataset_path)
     if "validation" not in dataset:
@@ -369,66 +380,59 @@ def load_datasets(dataset_path, max_train_samples, max_eval_samples, train_split
             dataset["validation"] = dataset["validation"].select(range(max_eval_samples))
     return dataset
 
-class DataCollatorCustom:
+class DataCollatorYear:
     def __init__(
         self, 
         tokenizer,
-        max_length
+        max_length,
     ):
         self.tokenizer = tokenizer
-        self.max_length = max_length
+        self.max_length = max_length 
 
     def __call__(self, examples):
-        input_ids_all = []
-        corr_input_ids_all = []
-        labels_all = []
-        start_idxes = []
-        end_idxes = []
+        input_ids = []
+        corr_input_ids = []
+        labels = []         # need to pass something otherwise compute_metrics will not be called
+        indices = []
+        digits = []
         
         for example in examples:
-            text = example["clean"]
-            corr_text = example["corrupted"]
+            text = example["prefix"]
+            corr_text = example["corr_prefix"]
             
-            assert "<predict>" in text and "</predict>" in text, f"Text does not contain <predict> and </predict>: {text}"
-            non_loss_portion = text[:text.find("<predict>")]
-            loss_portion = text[text.find("<predict>")+len("<predict>"):text.find("</predict>")]
-            final_portion = text[text.find("</predict>")+len("</predict>"):]
-            if "<predict>" in corr_text:
-                corr_text = corr_text[:corr_text.find("<predict>")] + corr_text[corr_text.find("</predict>")+len("</predict>"):]
+            input_ids_example = self.tokenizer(text, return_tensors="pt").input_ids[0]
+            corr_input_ids_example = self.tokenizer(corr_text, return_tensors="pt").input_ids[0]
+            indices.append(input_ids_example.shape[0] - 1)
+            input_ids_example = torch.nn.functional.pad(
+                input_ids_example, 
+                (0, self.max_length - input_ids_example.shape[0]), 
+                value=self.tokenizer.pad_token_id
+            )
+            corr_input_ids_example = torch.nn.functional.pad(
+                corr_input_ids_example,
+                (0, self.max_length - corr_input_ids_example.shape[0]),
+                value=self.tokenizer.pad_token_id
+            )
             
-            len_non_loss = self.tokenizer(non_loss_portion.strip(), return_tensors="pt").input_ids.shape[1]
-            len_up_to_loss = self.tokenizer((non_loss_portion + loss_portion).strip(), return_tensors="pt").input_ids.shape[1]
-            input_ids = self.tokenizer(
-                non_loss_portion + loss_portion + final_portion, 
-                return_tensors="pt", 
-                max_length=self.max_length, 
-                padding='max_length', 
-                truncation=True
-            ).input_ids[0]
-            corr_input_ids = self.tokenizer(corr_text, return_tensors="pt", max_length=self.max_length, padding='max_length', truncation=True).input_ids[0]
-            labels = input_ids.clone()
-            labels[:len_non_loss] = -100
-            labels[len_up_to_loss:] = -100
-
-            input_ids_all.append(input_ids)
-            corr_input_ids_all.append(corr_input_ids)
-            labels_all.append(labels)
-            
-            start_idxes.append(len_non_loss-1)
-            end_idxes.append(len_up_to_loss-1)
+            input_ids.append(input_ids_example)
+            corr_input_ids.append(corr_input_ids_example)
+            labels.append(torch.ones_like(input_ids_example) * -100)
+            digits.append(int(example["digits"]))
         
-        batch = {
-            "input_ids": torch.stack(input_ids_all),
-            "corr_input_ids": torch.stack(corr_input_ids_all),
-            "labels": torch.stack(labels_all),
-            "start_idxes": torch.LongTensor(start_idxes),
-            "end_idxes": torch.LongTensor(end_idxes),
-        }
+        return {
+            "input_ids": torch.stack(input_ids),
+            "corr_input_ids": torch.stack(corr_input_ids),
+            "labels": torch.stack(labels),
+            "indices": torch.LongTensor(indices),
+            "digits": torch.LongTensor(digits),
+        }      
 
-        return batch     
-
-def eval_fn(eval_pred): 
-    logits, target_edge_sparsity, target_layer_sparsity, model_edge_sparsity, model_layer_sparsity, reg_edge_loss, reg_layer_loss, kl_loss = eval_pred.predictions
+def eval_fn(eval_pred):         
+    (
+        _, logits, reg_edge_loss, reg_layer_loss, target_edge_sparsity, target_layer_sparsity, model_edge_sparsity, model_layer_sparsity, 
+        kl_loss, prob_digits, digits
+    ) = eval_pred.predictions
+    
     if len(model_edge_sparsity.shape) > 0:
         model_edge_sparsity = model_edge_sparsity[0].item()
         model_layer_sparsity = model_layer_sparsity[0].item()
@@ -440,22 +444,23 @@ def eval_fn(eval_pred):
         target_edge_sparsity = target_edge_sparsity.item()
         target_layer_sparsity = target_layer_sparsity.item()
     
-    predictions = np.argmax(logits, axis=-1)[:, :-1]
-    labels = eval_pred.label_ids[:, 1:]
-
-    eval_mask = (labels != -100).astype(int)
-    predictions = predictions * eval_mask
-    labels = labels * eval_mask
+    probability_difference = 0
+    for i in range(digits.shape[0]):
+        probability_difference += prob_digits[i, digits[i]+1:].sum() - prob_digits[i, :digits[i]].sum()
+    probability_difference /= digits.shape[0]
     
-    correct = (predictions == labels).all(axis=1)
-    accuracy = correct.sum().item() / correct.shape[0]
+    probability_difference_10 = 0
+    for i in range(digits.shape[0]):
+        probability_difference_10 += prob_digits[i, digits[i]+1:digits[i]+10].sum() - prob_digits[i, digits[i]-10:digits[i]].sum()
+    probability_difference_10 /= digits.shape[0]
     
     kl_loss = kl_loss.mean().item()
     reg_edge_loss = reg_edge_loss.mean().item()
     reg_layer_loss = reg_layer_loss.mean().item()
     
     return {
-        "eval_accuracy": accuracy,
+        "eval_probability_difference": probability_difference,
+        "eval_probability_difference_10": probability_difference_10,
         "model_edge_sparsity": model_edge_sparsity,
         "model_layer_sparsity": model_layer_sparsity,
         "target_edge_sparsity": target_edge_sparsity,
@@ -515,6 +520,7 @@ def get_optimizers(model, edges_lr, layers_lr, reg_edges_lr, reg_layers_lr, num_
 
     return optimizer, scheduler
 
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -527,6 +533,7 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+
 
     if model_args.use_auth_token is not None:
         warnings.warn(
@@ -580,7 +587,7 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    raw_datasets = load_datasets(data_args.dataset_path, data_args.max_train_samples, data_args.max_eval_samples, train_split=data_args.train_split)
+    raw_datasets = load_datasets(data_args.dataset_path, data_args.max_train_samples, data_args.max_eval_samples, data_args.train_split)
     n_train = len(raw_datasets["train"])
     
     model = FPT2LMHeadModel.from_pretrained(
@@ -604,12 +611,13 @@ def main():
         train_dataset = raw_datasets["train"]
 
     if training_args.do_eval:
+        # We don't have a validation dataset, so we'll just use the test dataset.
         if "validation" not in raw_datasets:
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = raw_datasets["validation"]
 
     # Data collator
-    collator = DataCollatorCustom(
+    collator = DataCollatorYear(
         tokenizer=tokenizer,
         max_length=data_args.max_seq_length
     )
@@ -628,6 +636,7 @@ def main():
     # Initialize our Trainer
     trainer = FPT2InfoTrainer(
         model=model,
+        tokenizer=tokenizer,
         gpt2_model=gpt2_model,
         data_collator=collator,
         args=training_args,

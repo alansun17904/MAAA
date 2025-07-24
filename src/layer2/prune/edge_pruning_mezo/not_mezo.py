@@ -9,7 +9,6 @@ import sys
 
 from typing import Optional
 from dataclasses import dataclass, field
-import wandb
 
 
 
@@ -546,19 +545,9 @@ class MeZOTrainer(Seq2SeqTrainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                # MARK: MeZO 1
-                # MeZO added: estimate gradient
-                if args.trainer != 'zo':
-                    with self.accelerator.accumulate(model):
-                        tr_loss_step = self.training_step(model, inputs)
-                    wandb.log({"Backprop Loss Step" : tr_loss_step}) # DEBUG ADDITION
-                if args.trainer =='zo' or args.trainer == 'zo_debug':
-                    tr_loss_step = self.zo_step(model, inputs)
-                    wandb.log({"MEZO Loss Step" : tr_loss_step}) # DEBUG ADDITION
-                
-                    
-                
-                # End Mezo addition
+
+                with self.accelerator.accumulate(model):
+                    tr_loss_step = self.training_step(model, inputs)
 
                 if (
                     args.logging_nan_inf_filter
@@ -586,64 +575,53 @@ class MeZOTrainer(Seq2SeqTrainer):
                     # last step in epoch but step is always smaller than gradient_accumulation_steps
                     is_last_step_and_steps_less_than_grad_acc
                 ):
-                    # MeZO added: update model with the estimated gradient
-                    # not sure if the first if statement in the following else block should be 
-                    # included in MeZO block
-                    # MARK: MeZO 2
-                    if args.trainer == "zo":
-                        self.zo_update(model)
-                    else:
-                    
-                        # the `or` condition of `is_last_step_and_steps_less_than_grad_acc` is not covered
-                        # in accelerate. So, explicitly enable sync gradients to True in that case.
-                        if is_last_step_and_steps_less_than_grad_acc:
-                            self.accelerator.gradient_state._set_sync_gradients(True)
+                    # the `or` condition of `is_last_step_and_steps_less_than_grad_acc` is not covered
+                    # in accelerate. So, explicitly enable sync gradients to True in that case.
+                    if is_last_step_and_steps_less_than_grad_acc:
+                        self.accelerator.gradient_state._set_sync_gradients(True)
 
-                        # Gradient clipping
-                        if args.max_grad_norm is not None and args.max_grad_norm > 0:
-                            # deepspeed does its own clipping
+                    # Gradient clipping
+                    if args.max_grad_norm is not None and args.max_grad_norm > 0:
+                        # deepspeed does its own clipping
 
-                            if is_sagemaker_mp_enabled() and args.fp16:
-                                _grad_norm = self.optimizer.clip_master_grads(args.max_grad_norm)
-                            elif self.use_apex:
-                                # Revert to normal clipping otherwise, handling Apex or full precision
-                                _grad_norm = nn.utils.clip_grad_norm_(
-                                    amp.master_params(self.optimizer),
-                                    args.max_grad_norm,
-                                )
-                            else:
-                                _grad_norm = self.accelerator.clip_grad_norm_(
-                                    model.parameters(),
-                                    args.max_grad_norm,
-                                )
+                        if is_sagemaker_mp_enabled() and args.fp16:
+                            _grad_norm = self.optimizer.clip_master_grads(args.max_grad_norm)
+                        elif self.use_apex:
+                            # Revert to normal clipping otherwise, handling Apex or full precision
+                            _grad_norm = nn.utils.clip_grad_norm_(
+                                amp.master_params(self.optimizer),
+                                args.max_grad_norm,
+                            )
+                        else:
+                            _grad_norm = self.accelerator.clip_grad_norm_(
+                                model.parameters(),
+                                args.max_grad_norm,
+                            )
 
-                            if (
-                                is_accelerate_available()
-                                and self.accelerator.distributed_type == DistributedType.DEEPSPEED
-                            ):
-                                grad_norm = model.get_global_grad_norm()
-                                # In some cases the grad norm may not return a float
-                                if hasattr(grad_norm, "item"):
-                                    grad_norm = grad_norm.item()
-                            else:
-                                grad_norm = _grad_norm
+                        if (
+                            is_accelerate_available()
+                            and self.accelerator.distributed_type == DistributedType.DEEPSPEED
+                        ):
+                            grad_norm = model.get_global_grad_norm()
+                            # In some cases the grad norm may not return a float
+                            if hasattr(grad_norm, "item"):
+                                grad_norm = grad_norm.item()
+                        else:
+                            grad_norm = _grad_norm
 
-                        self.control = self.callback_handler.on_pre_optimizer_step(args, self.state, self.control)
+                    self.control = self.callback_handler.on_pre_optimizer_step(args, self.state, self.control)
 
-                        self.optimizer.step()
+                    self.optimizer.step()
 
-                        self.control = self.callback_handler.on_optimizer_step(args, self.state, self.control)
+                    self.control = self.callback_handler.on_optimizer_step(args, self.state, self.control)
 
-                        optimizer_was_run = not self.accelerator.optimizer_step_was_skipped
-                        if optimizer_was_run:
-                            # Delay optimizer scheduling until metrics are generated
-                            if not isinstance(self.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                                self.lr_scheduler.step()
+                    optimizer_was_run = not self.accelerator.optimizer_step_was_skipped
+                    if optimizer_was_run:
+                        # Delay optimizer scheduling until metrics are generated
+                        if not isinstance(self.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                            self.lr_scheduler.step()
 
-                        model.zero_grad()
-
-                    # End Mezo addition
-
+                    model.zero_grad()
                     self.state.global_step += 1
                     self.state.epoch = epoch + (step + 1 + steps_skipped) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
@@ -774,7 +752,7 @@ class MeZOTrainer(Seq2SeqTrainer):
         with torch.inference_mode():
             inputs = self._prepare_inputs(inputs)
             with self.compute_loss_context_manager():
-                loss = self.compute_loss(model, inputs, mezo=True)
+                loss = self.compute_loss(model, inputs)
             if self.args.n_gpu > 1:
                 # Warning: this is copied from the original Huggingface Trainer. Untested.
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -849,6 +827,7 @@ class MeZOTrainer(Seq2SeqTrainer):
         loss2 = self.zo_forward(model, inputs)
 
         self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+        print(f'PROJECTED_GRAD: {self.projected_grad}')
 
         # No gradient accumulation support
         assert self.args.gradient_accumulation_steps == 1
@@ -857,9 +836,6 @@ class MeZOTrainer(Seq2SeqTrainer):
         self.zo_perturb_parameters(scaling_factor=1)
         
         return loss1
-    
-    def zo_get_lr(self, group):
-        return self.lr_scheduler.get_last_lr()[group-1]
 
 
     def zo_update(self, model):
@@ -870,23 +846,14 @@ class MeZOTrainer(Seq2SeqTrainer):
 
         # Reset the random seed for sampling zs
         torch.manual_seed(self.zo_random_seed)     
-        print(f'WEIGHT DECAY: {args.weight_decay}')
-
 
         for name, param in self.named_parameters_to_optim:
             # Resample z
             z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
-            if 'sparsity_lambda_edge' in name: # implement no node loss
-                param.data = param.data + self.zo_get_lr(2) * (self.projected_grad * z)
-            elif 'sparsity_lambda_node' in name:
-                param.data = param.data + self.zo_get_lr(4) * (self.projected_grad * z)
-                # print(f'LAMBDA LR: {self.zo_get_lr(2)}')
-            elif "bias" not in name and "layer_norm" not in name and "layernorm" not in name: # what is that --> should we be fixign this?
-                param.data = param.data - self.zo_get_lr(1) * (self.projected_grad * z + args.weight_decay * param.data)
-                # print(f'Bias LR: {self.zo_get_lr(1)}')
+            if "bias" not in name and "layer_norm" not in name and "layernorm" not in name:
+                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z + args.weight_decay * param.data)
             else:
-                param.data = param.data - self.zo_get_lr(1) * (self.projected_grad * z) # where does self._get_learning_rate() interface w/ the multiple LRs
-                # print(f'Other LR: {self.zo_get_lr(1)}')
+                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z)
 
         self.lr_scheduler.step()
     

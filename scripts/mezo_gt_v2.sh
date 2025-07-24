@@ -1,5 +1,6 @@
-# EDGE_SPARSITIES=(0.95 0.955 0.96 0.965 0.97 0.975 0.98 0.985 0.99 0.995 1.0 1.01 1.02 1.05 1.1)
+EDGE_SPARSITIES=(0.95 0.955 0.96 0.965 0.97 0.975 0.98 0.985 0.99 0.995 1.0 1.01 1.02 1.05 1.1)
 EDGE_SPARSITIES=(0.95 0.955 0.96 0.965 0.97 0.975 0.98 0.985 0.99 0.995 1.0)
+
 for i in "${!EDGE_SPARSITIES[@]}"; do
 
 EDGE_SPARSITY=${EDGE_SPARSITIES[i]}
@@ -21,7 +22,7 @@ TAG="wo_node_loss"
 train_split="train" # "train_80k"
 N_TRAIN=1000000 # Set to a large value so all of the (150 / 80000) examples are used
 N_VAL=150 # The val split size
-VERSION="edge_pruning"
+VERSION="edge_pruning_mezo"
 
 # You can wrap the following in an sbatch script if you use SLURM
 # Activate your environment etc
@@ -65,6 +66,7 @@ WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/prune/${VERSION}/
     --dataloader_num_workers 0 \
     --warmup_type linear \
     --with_embedding_nodes \
+    --trainer zo \
     $EXTRA
 
 done

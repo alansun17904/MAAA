@@ -18,7 +18,7 @@ TAG="wo_node_loss"
 # Uncomment this if you want to run with node loss
 # EXTRA=""
 # TAG="w_node_loss"
-VERSION="MAAA" # could be MeZO
+VERSION="edge_pruning_mezo" # could be MeZO
 
 train_split="train" # "train_3k"
 N_TRAIN=300 # 1000000 # Set to a large value so all of the (150 / 3000) examples are used

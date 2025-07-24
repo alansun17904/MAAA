@@ -27,6 +27,7 @@ import json
 import warnings
 from dataclasses import dataclass, field
 from typing import Optional
+import wandb
 
 import datasets
 import evaluate
@@ -56,8 +57,6 @@ from transformers import (
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
-
-
 
 
 import torch.nn as nn
@@ -138,7 +137,11 @@ class FPT2InfoTrainer(MeZOTrainer):
         else:
             return self.target_layer_sparsity
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, mezo = False):
+        if mezo:
+            # print('MEZO:')
+            pass
+
         if self.digits is None:
             self.digits = torch.LongTensor([self.tokenizer.encode("{:02d}".format(i))[0] for i in range(100)]).to(self.args.device)
 
@@ -172,7 +175,8 @@ class FPT2InfoTrainer(MeZOTrainer):
             **inputs, 
             target_edge_sparsity=self.get_current_edge_target_sparsity(self.state.global_step),
             target_node_sparsity=self.get_current_layer_target_sparsity(self.state.global_step),
-            corr_x=corr_x
+            corr_x=corr_x,
+            mezo=mezo
         )
         
         reg_edge_loss = outputs["edge_loss"]
@@ -190,6 +194,24 @@ class FPT2InfoTrainer(MeZOTrainer):
 
         kl_loss = nn.functional.kl_div(logits, gpt2_logits, reduction="batchmean", log_target=True)
         
+        wandb.log({
+            "Reg Loss" : reg_loss, 
+            "Edge Loss" : reg_edge_loss,
+            "Node Loss": reg_layer_loss,
+            "KL Loss": kl_loss
+            })
+        
+        # print(f"Reg Loss: {reg_loss}")
+        # print(f"Edge Loss: {reg_edge_loss}")
+        # print(f"Node Loss: {reg_layer_loss}")
+        # print(f"KL Loss: {kl_loss}")
+
+
+
+        
+        if mezo:
+            # print('END MEZO')
+            pass
         loss = kl_loss + reg_loss
         outputs["loss"] = loss
         outputs["kl_loss"] = kl_loss
@@ -495,6 +517,7 @@ def get_optimizers(model, edges_lr, layers_lr, reg_edges_lr, reg_layers_lr, num_
             optimizer_2_group.append(p)
         elif ('sparsity_lambda_node' in n) and (not disable_node_loss):
             optimizer_4_group.append(p)
+            print("NODE ENABLED")
     
     optimizer = AdamW(
         [

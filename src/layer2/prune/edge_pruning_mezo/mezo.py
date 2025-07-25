@@ -226,7 +226,7 @@ class MeZOTrainer(Seq2SeqTrainer):
         self.reg_edge_learning_rate = kwargs.pop('reg_edge_learning_rate', 1e-3)
         self.reg_layer_learning_rate = kwargs.pop('reg_layer_learning_rate', 1e-3)
         
-        super.__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None

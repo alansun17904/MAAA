@@ -677,6 +677,10 @@ def main():
         skip_layer_loss_if_higher_sparsity=data_args.stop_optimizing_layer_if_higher_sparsity,
         num_sparsity_warmup_steps=data_args.num_sparsity_warmup_steps,
         warmup_type=data_args.warmup_type,
+        edge_learning_rate = data_args.edge_learning_rate,
+        layer_learning_rate = data_args.layer_learning_rate,
+        reg_edge_learning_rate = data_args.reg_edge_learning_rate,
+        reg_layer_learning_rate = data_args.reg_layer_learning_rate,
     )
 
     # Training

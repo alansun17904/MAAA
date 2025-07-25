@@ -219,6 +219,15 @@ class MeZOTrainer(Seq2SeqTrainer):
     # used Transformers version 4.45.2
     # added "End Mezo addition" to show where changes ended
 
+    def __init__(self, *args, **kwargs):
+
+        self.edge_learning_rate = kwargs.pop('edge_learning_rate', 1e-3)
+        self.layer_learning_rate = kwargs.pop('layer_learning_rate', 1e-3)
+        self.reg_edge_learning_rate = kwargs.pop('reg_edge_learning_rate', 1e-3)
+        self.reg_layer_learning_rate = kwargs.pop('reg_layer_learning_rate', 1e-3)
+        
+        super.__init__(*args, **kwargs)
+
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
     ):
@@ -917,20 +926,4 @@ class MeZOTrainingArguments(Seq2SeqTrainingArguments):
     non_diff: bool = field(
         default = False,
         metadata = {"help" : "Not sure exactly why. MeZO explanation: use non-differentiable objective (only support F1 for SQuAD for now)"},
-    )
-    edge_learning_rate: Optional[float] = field(
-        default=1e-2,
-        metadata={"help": "The learning rate for the regularization term."}
-    )
-    layer_learning_rate: Optional[float] = field(
-        default=1,
-        metadata={"help": "The learning rate for the regularization term."}
-    )
-    reg_edge_learning_rate: Optional[float] = field(
-        default=1e-2,
-        metadata={"help": "The learning rate for the regularization term."}
-    )
-    reg_layer_learning_rate: Optional[float] = field(
-        default=1,
-        metadata={"help": "The learning rate for the regularization term."}
     )

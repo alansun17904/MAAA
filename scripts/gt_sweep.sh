@@ -5,10 +5,10 @@ for i in "${!EDGE_SPARSITIES[@]}"; do
 
 EDGE_SPARSITY=${EDGE_SPARSITIES[i]}
 NODE_SPARSITY=0.68
-ELR=1
-LLR=1
-RELR=0.5
-RLLR=0.5
+ELR=0.001
+LLR=0.001
+RELR=0.0001
+RLLR=0.0001
 TOTAL=500
 WARMUP=75
 
@@ -67,7 +67,7 @@ WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/layer2/p
     --with_embedding_nodes \
     --trainer zo \
     --seed 1000000 \
-    --zo_eps 0.00001
+    --zo_eps 0.001
     $EXTRA
 
 done

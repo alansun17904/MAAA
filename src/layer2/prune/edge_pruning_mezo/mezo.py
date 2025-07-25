@@ -859,7 +859,20 @@ class MeZOTrainer(Seq2SeqTrainer):
         return loss1
     
     def zo_get_lr(self, group):
-        return self.lr_scheduler.get_last_lr()[group-1]
+        lr = 0
+
+        if group == 1:
+            lr = self.edge_learning_rate
+        if group == 2:
+            lr = self.reg_edge_learning_rate
+        if group == 3:
+            lr = self.layer_learning_rate
+        if group == 4:
+            lr = self.reg_layer_learning_rate
+
+        return lr
+
+        # return self.lr_scheduler.get_last_lr()[group-1]
 
 
     def zo_update(self, model):
@@ -904,4 +917,20 @@ class MeZOTrainingArguments(Seq2SeqTrainingArguments):
     non_diff: bool = field(
         default = False,
         metadata = {"help" : "Not sure exactly why. MeZO explanation: use non-differentiable objective (only support F1 for SQuAD for now)"},
+    )
+    edge_learning_rate: Optional[float] = field(
+        default=1e-2,
+        metadata={"help": "The learning rate for the regularization term."}
+    )
+    layer_learning_rate: Optional[float] = field(
+        default=1,
+        metadata={"help": "The learning rate for the regularization term."}
+    )
+    reg_edge_learning_rate: Optional[float] = field(
+        default=1e-2,
+        metadata={"help": "The learning rate for the regularization term."}
+    )
+    reg_layer_learning_rate: Optional[float] = field(
+        default=1,
+        metadata={"help": "The learning rate for the regularization term."}
     )

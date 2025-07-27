@@ -238,10 +238,13 @@ class MeZOTrainer(Seq2SeqTrainer):
             else:
                 model_name = unwrapped_model._get_name()
             if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
-                loss = self.label_smoother(outputs, labels, shift_labels=True)
+                loss = # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
+                # plus lambda * the difference in model weights
             else:
-                loss = self.label_smoother(outputs, labels)
+                loss = # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
+                # plus lambda * the difference in model weights
         else:
+            raise Exception('There are no training labels')
             if isinstance(outputs, dict) and "loss" not in outputs:
                 raise ValueError(
                     "The model did not return a loss from the inputs, only the following keys: "

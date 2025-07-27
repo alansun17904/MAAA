@@ -43,6 +43,8 @@ Installing additional packages:
 2. Find the version used
 3. Manually add the package to `environment.yml` with the version. **DO NOT USE conda env export**
 
-## Questions
+## Todo:
 
-1. 
+1. Get dataset (see src/layer3/test.ipynb - with training_dataset)
+2. Compute_loss in src/layer3/l3mezo.py - make the loss kl divergence + lambda * output of func
+3. Create function which computes the difference in weights. 

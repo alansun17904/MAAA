@@ -1,3 +1,4 @@
+import copy
 import math
 from packaging import version
 import importlib
@@ -130,6 +131,7 @@ from transformers.utils.generic import ContextManagers
 
 
 
+
 if is_apex_available():
     from apex import amp
 
@@ -221,7 +223,7 @@ class MeZOTrainer(Seq2SeqTrainer):
         
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.original_model = self.modelcopy.deepcopy
+        self.original_model = copy.deepcopy(self.model)
 
 
     def compute_loss(

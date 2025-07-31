@@ -69,6 +69,9 @@ sys.path.append(
     )
 )   # Very hacky but the imports are annoying otherwise
 from modeling_fpt2 import FPT2LMHeadModel
+sys.path.append(os.path.join(os.getcwd(), "src/layer1/soft_edge_mask"))
+from label_smoothing_utils import load_mask, compute_z_star, compute_edge_scores
+
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
 logger = logging_py.getLogger(__name__)
@@ -98,27 +101,27 @@ class FPT2InfoTrainer(MeZOTrainer):
         if global_step < self.num_edge_sparsity_warmup_steps:
             if self.warmup_type == 'linear':
                 return (
-                    self.start_edge_sparsity + (self.target_edge_sparsity - self.start_edge_sparsity) * 
+                    self.start_edge_sparsity + (self.target_edge_sparsity - self.start_edge_sparsity) *
                     global_step / self.num_edge_sparsity_warmup_steps
                 )
             elif self.warmup_type == 'logarithmic':
-                log_one_minus_sparsity = math.log(1 - self.start_edge_sparsity) + (math.log(1 - self.target_edge_sparsity) - 
+                log_one_minus_sparsity = math.log(1 - self.start_edge_sparsity) + (math.log(1 - self.target_edge_sparsity) -
                     math.log(1 - self.start_edge_sparsity)) * global_step / self.num_edge_sparsity_warmup_steps
                 return 1 - math.exp(log_one_minus_sparsity)
             else:
                 raise ValueError(f'Unknown warmup type: {self.warmup_type}')
         else:
             return self.target_edge_sparsity
-        
+
     def get_current_layer_target_sparsity(self, global_step):
         if global_step < self.num_layer_sparsity_warmup_steps:
             if self.warmup_type == 'linear':
                 return (
-                    self.start_layer_sparsity + (self.target_layer_sparsity - self.start_layer_sparsity) * 
+                    self.start_layer_sparsity + (self.target_layer_sparsity - self.start_layer_sparsity) *
                     global_step / self.num_layer_sparsity_warmup_steps
                 )
             elif self.warmup_type == 'logarithmic':
-                log_one_minus_sparsity = math.log(1 - self.start_layer_sparsity) + (math.log(1 - self.target_layer_sparsity) - 
+                log_one_minus_sparsity = math.log(1 - self.start_layer_sparsity) + (math.log(1 - self.target_layer_sparsity) -
                     math.log(1 - self.start_layer_sparsity)) * global_step / self.num_layer_sparsity_warmup_steps
                 return 1 - math.exp(log_one_minus_sparsity)
             else:
@@ -132,16 +135,16 @@ class FPT2InfoTrainer(MeZOTrainer):
         _ = inputs.pop("labels")
         corr_input_ids = inputs.pop("corr_input_ids")
         input_ids = inputs.pop("input_ids")
-        
+
         bsz = input_ids.shape[0]
-        
+
         with torch.no_grad():
             # First get the logits from the GPT-2 model
             logits_gpt2 = self.gpt2_model(input_ids=input_ids, **inputs).logits
-            
+
             # Now run the corrupted inputs through it, and retain the activations
             corr_x = self.gpt2_model(
-                input_ids=corr_input_ids, 
+                input_ids=corr_input_ids,
                 **inputs,
                 output_writer_states=True
             ).writer_states
@@ -149,15 +152,15 @@ class FPT2InfoTrainer(MeZOTrainer):
             # Reshape corr_x in case we have distributed training
             tgt_shape = (-1, bsz // self.device_count, *corr_x.shape[2:])
             corr_x = corr_x.reshape(tgt_shape)
-        
+
         outputs = model(
             input_ids=input_ids,
-            **inputs, 
+            **inputs,
             target_edge_sparsity=self.get_current_edge_target_sparsity(self.state.global_step),
             target_node_sparsity=self.get_current_layer_target_sparsity(self.state.global_step),
             corr_x=corr_x
         )
-        
+
         reg_edge_loss = outputs["edge_loss"]
         if self.skip_layer_loss_if_higher_sparsity and outputs["model_node_sparsity"] > outputs["target_node_sparsity"]:
             reg_layer_loss = 0
@@ -165,7 +168,7 @@ class FPT2InfoTrainer(MeZOTrainer):
             reg_layer_loss = outputs["node_loss"]
         reg_loss = reg_edge_loss + reg_layer_loss
         logits = outputs["logits"]
-        
+
         logits_idx = torch.gather(
             logits,
             1,
@@ -182,7 +185,7 @@ class FPT2InfoTrainer(MeZOTrainer):
             nn.functional.softmax(logits_gpt2_idx, dim=-1),
             reduction='batchmean',
         )
-        
+
         loss = kl_loss + reg_loss
         outputs["loss"] = loss
         outputs["kl_loss"] = kl_loss
@@ -218,7 +221,7 @@ class DataTrainingArguments:
         },
     )
     overwrite_cache: bool = field(
-        default=False, 
+        default=False,
         metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
     max_seq_length: Optional[int] = field(
@@ -268,6 +271,14 @@ class DataTrainingArguments:
     warmup_type: Optional[str] = field(
         default="linear",
         metadata={"help": "The type of warmup to use for the regularization term."}
+    )
+    label_smoothing_alpha: Optional[float] = field(
+        default=None,
+        metadata={"help": "The alpha value for label smoothing initialization."},
+    )
+    initial_mask_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to the initial Wanda pruning mask for label smoothing."},
     )
     with_embedding_nodes: Optional[bool] = field(
         default=False,

@@ -44,7 +44,8 @@ from transformers.utils import (
     logging,
 )
 from transformers.utils.model_parallel_utils import assert_device_map, get_device_map
-from l0 import deterministic_z_from_log_alpha, sample_z_from_log_alpha
+# CORRECTED IMPORT
+from .l0 import deterministic_z_from_log_alpha, sample_z_from_log_alpha
 
 logger = logging.get_logger(__name__)
 
@@ -59,7 +60,7 @@ def writer_idx_to_name(writer_idx, num_layers, num_heads, with_embedding_nodes=F
             return "pos_embeds"
         else:
             writer_idx -= 2
-    
+
     layer_idx = writer_idx // (num_heads + 1)
     head_idx = writer_idx % (num_heads + 1)
     if head_idx == num_heads:
@@ -87,13 +88,13 @@ def writer_name_to_idx(name, num_layers, num_heads, with_embedding_nodes=False):
     else:
         raise ValueError(f"Unrecognized writer name {name}")
     return idx
-    
+
 def reader_idx_to_name(reader_idx, num_layers, num_heads):
     layer_idx = reader_idx // (3 * num_heads + 1)
     head_idx = reader_idx % (3 * num_heads + 1)
     if layer_idx == num_layers:
         return "resid_post"
-    
+
     if head_idx < num_heads:
         return f"a{layer_idx}.h{head_idx}.q"
     elif head_idx < 2 * num_heads:
@@ -1454,7 +1455,7 @@ class FPT2LMHeadModel(FPT2PreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(
-        self, 
+        self,
         config,
         with_embedding_nodes=False,
         disable_linear_regularization_term=False,
@@ -1591,6 +1592,44 @@ class FPT2LMHeadModel(FPT2PreTrainedModel):
     @torch.no_grad()
     def add_or_remove_edge(self, from_node, to_node, remove=False, value=None):
         return self.transformer.add_or_remove_edge(from_node, to_node, remove=remove, value=value)
+    
+    @torch.no_grad()
+    def initialize_alphas_from_scores(self, edge_scores: dict):
+        """
+        Initializes the log_alpha parameters from pre-computed edge scores.
+        A higher score means a higher log_alpha (less likely to be pruned).
+        Maps writer-style names from edge_scores to reader-style names in the model.
+        """
+        print("Initializing log_alpha parameters from edge scores...")
+
+        def score_to_log_alpha(score):
+            # Example mapping: scales scores to be centered around a high value.
+            return 10.0 + (score - 0.5) * 5.0
+
+        for from_node, to_nodes in edge_scores.items():
+            for to_node_writer, score in to_nodes.items():
+                log_alpha_value = score_to_log_alpha(score)
+
+                # Map the writer-style to_node to potential reader nodes
+                possible_readers = []
+                if to_node_writer.startswith('a'):  # e.g., 'a0.h0'
+                    possible_readers.append(to_node_writer + ".q")
+                    possible_readers.append(to_node_writer + ".k")
+                    possible_readers.append(to_node_writer + ".v")
+                elif to_node_writer.startswith('m'):  # e.g., 'm0'
+                    possible_readers.append(to_node_writer)
+                elif to_node_writer == "resid_post":
+                    possible_readers.append(to_node_writer)
+
+                for reader in possible_readers:
+                    try:
+                        # This call is now safe because 'reader' is a valid reader name
+                        self.transformer.add_or_remove_edge(from_node, reader, value=log_alpha_value)
+                    except (IndexError, ValueError):
+                        # Safely ignore invalid edges (e.g., from a later layer to an earlier one)
+                        pass
+
+        print("Log_alpha initialization complete.")
 
     def forward(
         self,

@@ -208,6 +208,7 @@ def _is_peft_model(model):
 
 
 
+
 class MeZOTrainer(Seq2SeqTrainer):
     # MAAA
 
@@ -217,15 +218,16 @@ class MeZOTrainer(Seq2SeqTrainer):
     # Transformers.Trainer._inner_training_loop were made
     # used Transformers version 4.45.2
     # added "End Mezo addition" to show where changes ended
-
+        
     def compute_loss(
             self, model, inputs, return_outputs=False
     ):
-        if self.label_smoother is not None and "labels" in inputs:
-            labels = inputs.pop("labels")
-        else:
-            labels = None
+        labels = inputs.pop("labels")
+            
         outputs = model(**inputs)
+
+        model_sft = nn.functional.log_softmax(outputs.logits, dim=1)
+        corr_sft = nn.functional.log_softmax(labels['corr_logits'], dim=1)
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
@@ -238,10 +240,12 @@ class MeZOTrainer(Seq2SeqTrainer):
             else:
                 model_name = unwrapped_model._get_name()
             if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
-                loss = # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
+                kl = nn.functional.kl_div(model_sft, corr_sft, reduction='sum', log_target=True)
+                loss = kl + self.args.lambda_train * 0 # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
                 # plus lambda * the difference in model weights
             else:
-                loss = # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
+                kl = nn.functional.kl_div(model_sft, corr_sft, reduction='sum', log_target=True)
+                loss = kl + self.args.lambda_train * 0 # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
                 # plus lambda * the difference in model weights
         else:
             raise Exception('There are no training labels')
@@ -254,7 +258,6 @@ class MeZOTrainer(Seq2SeqTrainer):
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
         return (loss, outputs) if return_outputs else loss
-        
 
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
@@ -816,6 +819,7 @@ class MeZOTrainer(Seq2SeqTrainer):
         """
         This separate F1 function is used as non-differentiable metric for SQuAD
         """
+        raise Exception("Mistake - the F1 function in MeZO was called")
         if gold[0] == "CANNOTANSWER" or gold[0] == "no answer":
             return int(normalize_answer(gold[0]) == normalize_answer(pred))
         else:
@@ -924,4 +928,8 @@ class MeZOTrainingArguments(Seq2SeqTrainingArguments):
     non_diff: bool = field(
         default = False,
         metadata = {"help" : "Not sure exactly why. MeZO explanation: use non-differentiable objective (only support F1 for SQuAD for now)"},
+    )
+    lambda_train : int = field(
+        default=0.6, 
+        metadata={"help" : "The lambda value which defines how important the change in model weights is for the loss, compared to the KL divergence between model and corrupted outputs."},
     )

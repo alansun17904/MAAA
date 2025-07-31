@@ -219,6 +219,11 @@ class MeZOTrainer(Seq2SeqTrainer):
     # used Transformers version 4.45.2
     # added "End Mezo addition" to show where changes ended
         
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.original_model = self.modelcopy.deepcopy
+
+
     def compute_loss(
             self, model, inputs, return_outputs=False
     ):
@@ -228,6 +233,7 @@ class MeZOTrainer(Seq2SeqTrainer):
 
         model_sft = nn.functional.log_softmax(outputs.logits, dim=1)
         corr_sft = nn.functional.log_softmax(labels['corr_logits'], dim=1)
+
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
@@ -241,11 +247,11 @@ class MeZOTrainer(Seq2SeqTrainer):
                 model_name = unwrapped_model._get_name()
             if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
                 kl = nn.functional.kl_div(model_sft, corr_sft, reduction='sum', log_target=True)
-                loss = kl + self.args.lambda_train * 0 # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
+                loss = kl + self.args.lambda_train * self.l2_norm_calculation(self.original_model, self.model) # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
                 # plus lambda * the difference in model weights
             else:
                 kl = nn.functional.kl_div(model_sft, corr_sft, reduction='sum', log_target=True)
-                loss = kl + self.args.lambda_train * 0 # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
+                loss = kl + self.args.lambda_train * self.l2_norm_calculation(self.original_model, self.model) # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
                 # plus lambda * the difference in model weights
         else:
             raise Exception('There are no training labels')
@@ -913,6 +919,21 @@ class MeZOTrainer(Seq2SeqTrainer):
                 param.data = param.data - self._get_learning_rate() * (self.projected_grad * z)
 
         self.lr_scheduler.step()
+    
+    def l2_norm_calculation(model_a, model_b):
+        """
+        Computes the L2 norm of the difference between the weights of two HuggingFace models.
+        Assumes both models have the same architecture.
+        a-b
+        """
+        norm = 0.0
+        params_a = dict(model_a.named_parameters())
+        params_b = dict(model_b.named_parameters())
+        for name in params_a:
+            if name in params_b:
+                diff = params_a[name].data - params_b[name].data
+                norm += torch.norm(diff, p=2).item() ** 2
+        return norm ** 0.5
     
 @dataclass
 class MeZOTrainingArguments(Seq2SeqTrainingArguments):

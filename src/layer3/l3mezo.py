@@ -222,8 +222,8 @@ class MeZOTrainer(Seq2SeqTrainer):
     # added "End Mezo addition" to show where changes ended
         
     def __init__(self, *args, **kwargs):
+        self.original_model = kwargs.pop("original_model", None)
         super().__init__(*args, **kwargs)
-        self.original_model = copy.deepcopy(self.model)
 
 
     def compute_loss(

@@ -17,6 +17,6 @@ def load_dataset(path, model : AutoModelForCausalLM, tokenizer : AutoTokenizer, 
 def generate_data(model : AutoModelForCausalLM, tokenizer : AutoTokenizer, device, example):
     tokens = tokenizer(example['corrupted'], return_tensors='pt').to(device)
     with torch.no_grad():
-        example['corr_logits'] = model(**tokens, max_new_tokens=10).logits
+        example['corr_logits'] = model.generate(**tokens, max_new_tokens=10).logits
     # Fix device & max new tokens
     return example

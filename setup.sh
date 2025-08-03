@@ -11,11 +11,11 @@ apt-get install unzip
 # Install Mini conda
 # make this optional / argumented
 # make this an arg
-mkdir -p ~/miniconda3
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh
-bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
-rm ~/miniconda3/miniconda.sh
-source ~/miniconda3/bin/activate
+mkdir -p ./miniconda3
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ./miniconda3/miniconda.sh
+bash ./miniconda3/miniconda.sh -b -u -p ./miniconda3
+rm ./miniconda3/miniconda.sh
+source ./miniconda3/bin/activate
 conda init --all
 source ~/.bashrc
 

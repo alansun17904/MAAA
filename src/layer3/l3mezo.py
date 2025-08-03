@@ -956,3 +956,7 @@ class MeZOTrainingArguments(Seq2SeqTrainingArguments):
         default=0.6, 
         metadata={"help" : "The lambda value which defines how important the change in model weights is for the loss, compared to the KL divergence between model and corrupted outputs."},
     )
+    original_model : PreTrainedModel = field(
+        default=None,
+        metadata={'help' : 'The base model (which has no training) to which the trained weights should be compared (for calculating change in model weights)'}
+    )

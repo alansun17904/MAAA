@@ -4,7 +4,7 @@ from datasets import load_dataset
 from functools import partial
 
 
-def load_dataset(path, model : AutoModelForCausalLM, tokenizer : AutoTokenizer, device):
+def ca_load_dataset(path, model : AutoModelForCausalLM, tokenizer : AutoTokenizer, device):
     # In the future, we can refactor this to account for the various different types of datasets or smth
     dataset = load_dataset('csv', data_files=path)
     dataset.set_format(type='torch')

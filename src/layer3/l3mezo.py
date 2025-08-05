@@ -231,9 +231,9 @@ class MeZOTrainer(Seq2SeqTrainer):
     ):
         labels = inputs.pop("labels")
             
-        outputs = model(**inputs)
+        outputs = model.generate(**inputs, max_new_tokens=self.args.generation_max_length, return_dict_in_generate=True, output_logits=True)
 
-        model_sft = nn.functional.log_softmax(outputs.logits, dim=1)
+        model_sft = nn.functional.log_softmax(torch.transpose(torch.stack(outputs.logits), 0, 1), dim=1)
         corr_sft = nn.functional.log_softmax(labels['corr_logits'], dim=1)
 
         # Save past state if it exists

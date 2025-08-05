@@ -4,12 +4,12 @@ from datasets import load_dataset
 from functools import partial
 
 
-def ca_load_dataset(path, model : AutoModelForCausalLM, tokenizer : AutoTokenizer, device, max_new_tokens):
+def ca_load_dataset(path, model : AutoModelForCausalLM, tokenizer : AutoTokenizer, device, max_new_tokens, batch_size):
     # In the future, we can refactor this to account for the various different types of datasets or smth
     dataset = load_dataset('csv', data_files=path)
     dataset.set_format(type='torch')
 
-    dataset = dataset.map(partial(generate_data, model, tokenizer, device, max_new_tokens), batched=True)
+    dataset = dataset.map(partial(generate_data, model, tokenizer, device, max_new_tokens), batched=True, batch_size=batch_size)
     dataset = dataset.map() # yo wtf
     return dataset
 

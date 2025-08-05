@@ -222,7 +222,7 @@ class MeZOTrainer(Seq2SeqTrainer):
     # added "End Mezo addition" to show where changes ended
         
     def __init__(self, *args, **kwargs):
-        self.original_model = kwargs.pop("original_model", None)
+        # self.original_model = kwargs.pop("original_model", None)
         super().__init__(*args, **kwargs)
 
 
@@ -249,11 +249,11 @@ class MeZOTrainer(Seq2SeqTrainer):
                 model_name = unwrapped_model._get_name()
             if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
                 kl = nn.functional.kl_div(model_sft, corr_sft, reduction='sum', log_target=True)
-                loss = kl + self.args.lambda_train * self.l2_norm_calculation(self.original_model, self.model) # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
+                loss = kl + self.args.lambda_train * self.l2_norm_calculation(self.args.original_model, self.model) # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
                 # plus lambda * the difference in model weights
             else:
                 kl = nn.functional.kl_div(model_sft, corr_sft, reduction='sum', log_target=True)
-                loss = kl + self.args.lambda_train * self.l2_norm_calculation(self.original_model, self.model) # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
+                loss = kl + self.args.lambda_train * self.l2_norm_calculation(self.args.original_model, self.model) # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
                 # plus lambda * the difference in model weights
         else:
             raise Exception('There are no training labels')

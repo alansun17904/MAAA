@@ -898,9 +898,11 @@ class MeZOTrainer(Seq2SeqTrainer):
             # Resample z
             z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
             if 'sparsity_lambda_edge' in name: # implement no node loss
+                pass
                 param.data = param.data + self.zo_get_lr(2) * (self.projected_grad * z)
                 # print(f'LAMBDA EDGE LR: {self.zo_get_lr(2)}')
             elif 'sparsity_lambda_node' in name:
+                pass
                 param.data = param.data + self.zo_get_lr(4) * (self.projected_grad * z)
                 # print(f'LAMBDA NODE LR: {self.zo_get_lr(2)}')
             elif "bias" not in name and "layer_norm" not in name and "layernorm" not in name: # what is that --> should we be fixign this?

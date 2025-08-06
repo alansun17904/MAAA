@@ -892,7 +892,6 @@ class MeZOTrainer(Seq2SeqTrainer):
 
         # Reset the random seed for sampling zs
         torch.manual_seed(self.zo_random_seed)     
-        print(f'WEIGHT DECAY: {args.weight_decay}')
 
 
         for name, param in self.named_parameters_to_optim:

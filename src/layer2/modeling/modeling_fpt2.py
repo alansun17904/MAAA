@@ -882,12 +882,12 @@ class FPT2Model(FPT2PreTrainedModel):
         else:
             # self.sparsity_lambda_edges_1 = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
             # self.sparsity_lambda_nodes_1 = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
-            self.sparsity_lambda_edges_1 = torch.tensor([0], dtype=self._dtype)
-            self.sparsity_lambda_nodes_1 = torch.tensor([0], dtype=self._dtype)
-        self.sparsity_lambda_edges_2 = nn.Parameter(torch.tensor([4], dtype=self._dtype))
-        self.sparsity_lambda_nodes_2 = nn.Parameter(torch.tensor([4], dtype=self._dtype))
-        # self.sparsity_lambda_edges_2 = torch.tensor([4], dtype=self._dtype)
-        # self.sparsity_lambda_nodes_2 = torch.tensor([4], dtype=self._dtype)
+            self.sparsity_lambda_edges_1 = torch.tensor([-4], dtype=self._dtype)
+            self.sparsity_lambda_nodes_1 = torch.tensor([-4], dtype=self._dtype)
+        # self.sparsity_lambda_edges_2 = nn.Parameter(torch.tensor([4], dtype=self._dtype))
+        # self.sparsity_lambda_nodes_2 = nn.Parameter(torch.tensor([4], dtype=self._dtype))
+        self.sparsity_lambda_edges_2 = torch.tensor([0], dtype=self._dtype)
+        self.sparsity_lambda_nodes_2 = torch.tensor([0], dtype=self._dtype)
 
         # Initialize weights and apply final processing
         self.post_init()

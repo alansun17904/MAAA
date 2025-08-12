@@ -577,11 +577,19 @@ def main():
 
     raw_datasets = load_datasets(data_args.dataset_path, data_args.max_train_samples, data_args.max_eval_samples, train_split=data_args.train_split)
     n_train = len(raw_datasets["train"])
+
+    initial_scores = None
+    if data_args.label_smoothing_alpha is not None and data_args.initial_mask_path is not None:
+        print("Applying label smoothing initialization...")
+        initial_mask = load_mask(data_args.initial_mask_path)
+        z_star = compute_z_star(initial_mask, alpha=data_args.label_smoothing_alpha)
+        initial_scores = compute_edge_scores(z_star)
     
     model = FPT2LMHeadModel.from_pretrained(
         model_args.initialize_from,
         with_embedding_nodes=data_args.with_embedding_nodes,
         disable_linear_regularization_term=data_args.disable_linear_reg_term,
+        initial_scores=initial_scores,  # <-- Pass scores here
     )
     gpt2_model = FPT2LMHeadModel.from_pretrained(
         "gpt2",

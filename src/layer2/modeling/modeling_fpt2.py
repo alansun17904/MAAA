@@ -466,10 +466,11 @@ class FPT2MLP(nn.Module):
 
 class FPT2Block(nn.Module):
     def __init__(
-        self, 
-        config, 
+        self,
+        config,
         layer_idx=None,
         with_embedding_nodes=False,
+        initial_scores: Optional[dict] = None,
     ):
         super().__init__()
         hidden_size = config.hidden_size
@@ -478,43 +479,67 @@ class FPT2Block(nn.Module):
         self.ln_1 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
         self.attn = FPT2Attention(config=config, layer_idx=layer_idx)
         self.ln_2 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
-
         self.mlp = FPT2MLP(inner_dim, config)
-        
+
         self.n_head = config.n_head
-        self.n_readers = get_num_readers(config)
         self.n_writers = get_num_writers(config, with_embedding_nodes)
         self._dtype = self.mlp.c_fc.weight.dtype
-        
+
         reader_offset, writer_offset = get_base_indices_for_layer(config, layer_idx, with_embedding_nodes)
-        self.attn_reader_offset = reader_offset
-        self.mlp_reader_offset = reader_offset + 3 * config.n_head
         self.attn_writer_offset = writer_offset
         self.mlp_writer_offset = writer_offset + config.n_head
-        self.edge_threshold_for_deterministic = None
-        self.node_threshold_for_deterministic = None
-        
+
+        # Pruning parameters
         self.q_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, self.n_head, dtype=self._dtype))
         self.k_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, self.n_head, dtype=self._dtype))
         self.v_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, self.n_head, dtype=self._dtype))
         self.mlp_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, dtype=self._dtype))
-        self.q_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.k_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.v_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.mlp_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        
+
+        if initial_scores is None:
+            self.q_read_log_alphas.data.normal_(mean=10.0, std=0.01)
+            self.k_read_log_alphas.data.normal_(mean=10.0, std=0.01)
+            self.v_read_log_alphas.data.normal_(mean=10.0, std=0.01)
+            self.mlp_read_log_alphas.data.normal_(mean=10.0, std=0.01)
+        else:
+            def score_to_log_alpha(score):
+                return 10.0 + (score - 0.5) * 5.0
+
+            self.q_read_log_alphas.data.fill_(-10.0)
+            self.k_read_log_alphas.data.fill_(-10.0)
+            self.v_read_log_alphas.data.fill_(-10.0)
+            self.mlp_read_log_alphas.data.fill_(-10.0)
+
+            for from_idx in range(self.n_writers):
+                from_node = writer_idx_to_name(from_idx, config.n_layer, self.n_head, with_embedding_nodes)
+                if from_node in initial_scores:
+                    to_scores = initial_scores[from_node]
+                    
+                    mlp_reader_as_writer_name = f"m{layer_idx}"
+                    if mlp_reader_as_writer_name in to_scores:
+                        score = to_scores[mlp_reader_as_writer_name]
+                        self.mlp_read_log_alphas.data[from_idx] = score_to_log_alpha(score)
+
+                    for head_idx in range(self.n_head):
+                        attn_reader_as_writer_name = f"a{layer_idx}.h{head_idx}"
+                        if attn_reader_as_writer_name in to_scores:
+                            score = to_scores[attn_reader_as_writer_name]
+                            self.q_read_log_alphas.data[from_idx, head_idx] = score_to_log_alpha(score)
+                            self.k_read_log_alphas.data[from_idx, head_idx] = score_to_log_alpha(score)
+                            self.v_read_log_alphas.data[from_idx, head_idx] = score_to_log_alpha(score)
+
         self.attn_write_log_alphas = nn.Parameter(torch.empty(self.n_head))
         self.mlp_write_log_alphas = nn.Parameter(torch.empty(1))
         self.attn_write_log_alphas.data.normal_(mean=10.0, std=0.01)
         self.mlp_write_log_alphas.data.normal_(mean=10.0, std=0.01)
-        
+
+        # --- MASKS FOR INFORMATION FLOW (Unchanged) ---
         attn_read_common_mask = torch.zeros(self.n_writers, dtype=self._dtype)
         attn_read_common_mask[:self.attn_writer_offset] = 1
         attn_read_common_mask = attn_read_common_mask.unsqueeze(1)
         self.register_buffer("attn_read_common_mask", attn_read_common_mask)
         
         attn_write_common_mask = F.pad(
-            torch.eye(self.n_head, dtype=torch.float32).to(self._dtype), # eye does not support bfloat16
+            torch.eye(self.n_head, dtype=torch.float32).to(self._dtype),
             (self.attn_writer_offset, self.n_writers - self.attn_writer_offset - self.n_head, 0, 0)
         )
         self.register_buffer("attn_write_common_mask", attn_write_common_mask)   
@@ -525,235 +550,7 @@ class FPT2Block(nn.Module):
         
         mlp_write_common_mask = torch.zeros((self.n_writers, 1), dtype=self._dtype)
         mlp_write_common_mask[self.mlp_writer_offset, 0] = 1
-        self.register_buffer("mlp_write_common_mask", mlp_write_common_mask)     
-
-    @torch.no_grad()
-    def set_edge_threshold_for_deterministic(self, edge_threshold_for_deterministic):
-        self.edge_threshold_for_deterministic = edge_threshold_for_deterministic
-        
-    @torch.no_grad()
-    def set_node_threshold_for_deterministic(self, node_threshold_for_deterministic):
-        self.node_threshold_for_deterministic = node_threshold_for_deterministic
-        
-    @torch.no_grad()
-    def reset_all_log_alphas(self):
-        self.q_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.k_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.v_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.attn_write_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.mlp_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.mlp_write_log_alphas.data.normal_(mean=10.0, std=0.01)
-
-    def attn_read(self, x, corr_x=None, embeds=None):
-        # x is (writers, batch_size, sequence_length, hidden_size)
-        # corr_x, if it exists, is (writers, batch_size, sequence_length, hidden_size)
-        # embeds, if it exists, is (batch_size, sequence_length, hidden_size)
-        
-        q_m = get_mask(self.q_read_log_alphas, training=self.training, threshold_for_deterministic=self.edge_threshold_for_deterministic)
-        k_m = get_mask(self.k_read_log_alphas, training=self.training, threshold_for_deterministic=self.edge_threshold_for_deterministic)
-        v_m = get_mask(self.v_read_log_alphas, training=self.training, threshold_for_deterministic=self.edge_threshold_for_deterministic)
-        
-        q_z = q_m * self.attn_read_common_mask
-        k_z = k_m * self.attn_read_common_mask
-        v_z = v_m * self.attn_read_common_mask
-        
-        x_q = torch.einsum("wbsd,wh->hbsd", x, q_z)
-        x_k = torch.einsum("wbsd,wh->hbsd", x, k_z)
-        x_v = torch.einsum("wbsd,wh->hbsd", x, v_z)
-        
-        if embeds is not None:
-            x_q = x_q + embeds.unsqueeze(0)
-            x_k = x_k + embeds.unsqueeze(0)
-            x_v = x_v + embeds.unsqueeze(0)
-        
-        if corr_x is not None:
-            x_q = x_q + torch.einsum("wbsd,wh->hbsd", corr_x, (1-q_m) * self.attn_read_common_mask)
-            x_k = x_k + torch.einsum("wbsd,wh->hbsd", corr_x, (1-k_m) * self.attn_read_common_mask)
-            x_v = x_v + torch.einsum("wbsd,wh->hbsd", corr_x, (1-v_m) * self.attn_read_common_mask)
-            
-        z_edges_sum = torch.sum(q_z) + torch.sum(k_z) + torch.sum(v_z)
-        
-        return x_q, x_k, x_v, z_edges_sum
-    
-    def attn_write(self, residual, x, corr_x=None):
-        # residual is (writers, batch_size, sequence_length, hidden_size)
-        # x is (num_heads, batch_size, sequence_length, hidden_size)
-        # corr_x, if it exists, is (writers, batch_size, sequence_length, hidden_size)
-        z = get_mask(
-            self.attn_write_log_alphas, 
-            training=self.training, 
-            threshold_for_deterministic=self.node_threshold_for_deterministic
-        ).reshape(-1, 1, 1, 1)
-        x = x * z
-        
-        if corr_x is not None:
-            x = x + corr_x[self.attn_writer_offset : self.attn_writer_offset + self.n_head] * (1-z)
-            
-        x = torch.einsum("nbsd,nw->wbsd", x, self.attn_write_common_mask)
-        
-        residual = residual + x
-        z_nodes_sum = torch.sum(z)
-        
-        return residual, z_nodes_sum
-
-    def mlp_read(self, x, corr_x=None, embeds=None):
-        # x is (writers, batch_size, sequence_length, hidden_size)
-        # corr_x, if it exists, is (writers, batch_size, sequence_length, hidden_size)
-        # embeds, if it exists, is (batch_size, sequence_length, hidden_size)
-        m = get_mask(self.mlp_read_log_alphas, training=self.training, threshold_for_deterministic=self.edge_threshold_for_deterministic)
-
-        z = m * self.mlp_read_common_mask
-        x_z = torch.einsum("wbsd,w->bsd", x, z)
-        
-        if embeds is not None:
-            x_z = x_z + embeds
-        if corr_x is not None:
-            x_z = x_z + torch.einsum("wbsd,w->bsd", corr_x, (1-m) * self.mlp_read_common_mask)
-
-        z_edges_sum = torch.sum(z)
-        
-        return x_z, z_edges_sum
-
-    def mlp_write(self, residual, x, corr_x=None):
-        # residual is (writers, batch_size, sequence_length, hidden_size)
-        # x is (batch_size, sequence_length, hidden_size)
-        # corr_x, if it exists, is (writers, batch_size, sequence_length, hidden_size)
-        z = get_mask(
-            self.mlp_write_log_alphas, 
-            training=self.training, 
-            threshold_for_deterministic=self.node_threshold_for_deterministic
-        ).reshape(1, 1, 1)
-        x = x * z
-        
-        if corr_x is not None:
-            x = x + corr_x[self.mlp_writer_offset] * (1-z)
-            
-        x = torch.einsum("ibsd,wi->wbsd", x.unsqueeze(0), self.mlp_write_common_mask)
-        residual = residual + x
-        
-        return residual, torch.sum(z)
-
-    @torch.no_grad()
-    def get_edge_masks(self):
-        z_q = get_mask(
-            self.q_read_log_alphas,
-            training=self.training,
-            threshold_for_deterministic=self.edge_threshold_for_deterministic
-        )
-        z_q = z_q[:self.attn_writer_offset, :]
-        z_k = get_mask(
-            self.k_read_log_alphas,
-            training=self.training,
-            threshold_for_deterministic=self.edge_threshold_for_deterministic
-        )
-        z_k = z_k[:self.attn_writer_offset, :]
-        z_v = get_mask(
-            self.v_read_log_alphas,
-            training=self.training,
-            threshold_for_deterministic=self.edge_threshold_for_deterministic
-        )
-        z_v = z_v[:self.attn_writer_offset, :]
-        
-        z_mlp = get_mask(
-            self.mlp_read_log_alphas, 
-            training=self.training, 
-            threshold_for_deterministic=self.edge_threshold_for_deterministic
-        )
-        z_mlp = z_mlp[:self.mlp_writer_offset]
-        
-        return (z_q, z_k, z_v, z_mlp)
-    
-    @torch.no_grad()
-    def get_node_masks(self):
-        z_attn = get_mask(
-            self.attn_write_log_alphas,
-            training=self.training,
-            threshold_for_deterministic=self.node_threshold_for_deterministic
-        )
-                
-        z_mlp = get_mask(
-            self.mlp_write_log_alphas, 
-            training=self.training, 
-            threshold_for_deterministic=self.node_threshold_for_deterministic
-        ).reshape([])
-        
-        return (z_attn, z_mlp)
-
-    @torch.no_grad()
-    def set_attn_mask_value(self, from_idx, head_idx, qkv, value):
-        if qkv == "q":
-            old_value = self.q_read_log_alphas[from_idx, head_idx].detach().item()
-            self.q_read_log_alphas[from_idx, head_idx] = value
-        elif qkv == "k":
-            old_value = self.k_read_log_alphas[from_idx, head_idx].detach().item()
-            self.k_read_log_alphas[from_idx, head_idx] = value
-        elif qkv == "v":
-            old_value = self.v_read_log_alphas[from_idx, head_idx].detach().item()
-            self.v_read_log_alphas[from_idx, head_idx] = value
-        else:
-            raise ValueError(f"Unrecognized qkv {qkv}")
-        return old_value
-    
-    @torch.no_grad()
-    def set_mlp_mask_value(self, from_idx, value):
-        old_value = self.mlp_read_log_alphas[from_idx].detach().item()
-        self.mlp_read_log_alphas[from_idx] = value
-        return old_value
-
-    def forward(
-        self,
-        hidden_states: Optional[Tuple[torch.FloatTensor]],
-        layer_past: Optional[Tuple[torch.Tensor]] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = False,
-        output_attentions: Optional[bool] = False,
-        corr_x: Optional[torch.Tensor] = None,
-        embeds:  Optional[torch.FloatTensor] = None,
-    ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
-        residual = hidden_states
-        
-        q_hidden_states, k_hidden_states, v_hidden_states, z_attn_edges_sum = self.attn_read(
-            hidden_states, 
-            embeds=embeds,
-            corr_x=corr_x
-        )
-        q_hidden_states = self.ln_1(q_hidden_states)
-        k_hidden_states = self.ln_1(k_hidden_states)
-        v_hidden_states = self.ln_1(v_hidden_states)
-        
-        attn_outputs = self.attn(
-            q_hidden_states,
-            k_hidden_states,
-            v_hidden_states,
-            layer_past=layer_past,
-            attention_mask=attention_mask,
-            head_mask=head_mask,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-        )
-        attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
-        outputs = attn_outputs[1:]
-        
-        residual, z_attn_nodes_sum = self.attn_write(residual, attn_output, corr_x=corr_x)
-        
-        hidden_states, z_mlp_edges_sum = self.mlp_read(residual, embeds=embeds, corr_x=corr_x)
-        hidden_states = self.ln_2(hidden_states)
-        feed_forward_hidden_states = self.mlp(hidden_states)
-        
-        hidden_states, z_mlp_nodes_sum = self.mlp_write(residual, feed_forward_hidden_states, corr_x=corr_x)
-
-        z_edges_sum = z_attn_edges_sum + z_mlp_edges_sum
-        z_nodes_sum = z_attn_nodes_sum + z_mlp_nodes_sum
-        
-        outputs_ = (hidden_states, z_edges_sum, z_nodes_sum)
-
-        if use_cache:
-            outputs = outputs_ + outputs
-        else:
-            outputs = outputs_ + outputs[1:]
-
-        return outputs  # hidden_states, z_edges_sum, z_nodes_sum, present, (attentions, cross_attentions)
+        self.register_buffer("mlp_write_common_mask", mlp_write_common_mask)
 
 
 class FPT2PreTrainedModel(PreTrainedModel):
@@ -801,7 +598,7 @@ class FPT2PreTrainedModel(PreTrainedModel):
                 # Special Scaled Initialization --> There are 2 Layer Norms per Transformer Block
                 p.data.normal_(mean=0.0, std=(self.config.initializer_range / math.sqrt(2 * self.config.n_layer)))
 
-@dataclass 
+@dataclass
 class FPT2ModelOutput(ModelOutput):
     last_hidden_state: torch.FloatTensor = None
     past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
@@ -817,75 +614,45 @@ class FPT2ModelOutput(ModelOutput):
 
 class FPT2Model(FPT2PreTrainedModel):
     def __init__(
-        self, 
+        self,
         config,
         with_embedding_nodes=False,
         disable_linear_regularization_term=False,
+        initial_scores: Optional[dict] = None,
     ):
         super().__init__(config)
-
         self.embed_dim = config.hidden_size
-
         self.wte = nn.Embedding(config.vocab_size, self.embed_dim)
         self.wpe = nn.Embedding(config.max_position_embeddings, self.embed_dim)
 
         self.h = nn.ModuleList([
             FPT2Block(
-                config, 
+                config,
                 layer_idx=i,
                 with_embedding_nodes=with_embedding_nodes,
+                initial_scores=initial_scores,
             ) for i in range(config.num_hidden_layers)
         ])
         self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
 
-        # Model parallel
-        self.model_parallel = False
-        self.device_map = None
-        self.gradient_checkpointing = False
-        self._attn_implementation = config._attn_implementation
-        
-        # New stuff
-        self.with_embedding_nodes = with_embedding_nodes
-        self.disable_linear_regularization_term = disable_linear_regularization_term
-        self.n_readers = get_num_readers(config)
+        # ... (other initializations)
         self.n_writers = get_num_writers(config, with_embedding_nodes)
-        self.n_edges = get_num_edges(config, with_embedding_nodes)
-        self.n_nodes = get_num_nodes(config, with_embedding_nodes)
-        self.n_layer = config.n_layer
-        self.n_head = config.n_head
-        self._dtype = self.wte.weight.dtype
-        
-        self.edge_threshold_for_deterministic = None
-        self.node_threshold_for_deterministic = None
-        
-        if self.with_embedding_nodes:
-            self.token_write_log_alpha = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
-            self.token_write_log_alpha.data.normal_(mean=10.0, std=0.01)
-            self.pos_write_log_alpha = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
-            self.pos_write_log_alpha.data.normal_(mean=10.0, std=0.01)
-            
-            token_write_mask = torch.zeros(self.n_writers, dtype=self._dtype)
-            token_write_mask[0] = 1
-            self.register_buffer("token_write_mask", token_write_mask)
-            pos_write_mask = torch.zeros(self.n_writers, dtype=self._dtype)
-            pos_write_mask[1] = 1
-            self.register_buffer("pos_write_mask", pos_write_mask)
+        self.final_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, dtype=self.wte.weight.dtype))
 
-        self.final_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, dtype=self._dtype))
-        self.final_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        
-        if disable_linear_regularization_term:
-            sparsity_lambda_edges_1 = torch.tensor([0.0], dtype=self._dtype)
-            sparsity_lambda_nodes_1 = torch.tensor([0.0], dtype=self._dtype)
-            self.register_buffer("sparsity_lambda_edges_1", sparsity_lambda_edges_1)
-            self.register_buffer("sparsity_lambda_nodes_1", sparsity_lambda_nodes_1)
+        # Initialize final_read_log_alphas based on scores
+        if initial_scores is None:
+            self.final_read_log_alphas.data.normal_(mean=10.0, std=0.01)
         else:
-            self.sparsity_lambda_edges_1 = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
-            self.sparsity_lambda_nodes_1 = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
-        self.sparsity_lambda_edges_2 = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
-        self.sparsity_lambda_nodes_2 = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
-
-        # Initialize weights and apply final processing
+            def score_to_log_alpha(score):
+                return 10.0 + (score - 0.5) * 5.0
+            
+            self.final_read_log_alphas.data.fill_(-10.0)
+            for from_idx in range(self.n_writers):
+                from_node = writer_idx_to_name(from_idx, config.n_layer, config.n_head, with_embedding_nodes)
+                if from_node in initial_scores and "resid_post" in initial_scores[from_node]:
+                    score = initial_scores[from_node]["resid_post"]
+                    self.final_read_log_alphas.data[from_idx] = score_to_log_alpha(score)
+        
         self.post_init()
 
     @torch.no_grad()
@@ -1065,29 +832,6 @@ class FPT2Model(FPT2PreTrainedModel):
                 ))
         return edges
 
-    @torch.no_grad()
-    def add_or_remove_edge(self, from_node, to_node, remove=False, value=None):
-        if value is None:
-            value = -10 if remove else 10
-        from_idx = writer_name_to_idx(
-            from_node, 
-            num_layers=self.n_layer, 
-            num_heads=self.n_head, 
-            with_embedding_nodes=self.with_embedding_nodes
-        )
-        if to_node == "resid_post":
-            old_value = self.final_read_log_alphas[from_idx].detach().item()
-            self.final_read_log_alphas[from_idx] = value
-        elif to_node.startswith("m"):
-            layer_idx = int(to_node[1:])
-            old_value = self.h[layer_idx].set_mlp_mask_value(from_idx, value)
-        else:
-            parts = to_node.split(".")
-            layer_idx = int(parts[0][1:])
-            head_idx = int(parts[1][1:])
-            qkv = parts[2]
-            old_value = self.h[layer_idx].set_attn_mask_value(from_idx, head_idx, qkv, value)
-        return old_value
 
     def parallelize(self, device_map=None):
         # Check validity of device_map
@@ -1459,20 +1203,16 @@ class FPT2LMHeadModel(FPT2PreTrainedModel):
         config,
         with_embedding_nodes=False,
         disable_linear_regularization_term=False,
+        initial_scores: Optional[dict] = None,
     ):
         super().__init__(config)
         self.transformer = FPT2Model(
             config,
             with_embedding_nodes=with_embedding_nodes,
             disable_linear_regularization_term=disable_linear_regularization_term,
+            initial_scores=initial_scores,
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-
-        # Model parallel
-        self.model_parallel = False
-        self.device_map = None
-
-        # Initialize weights and apply final processing
         self.post_init()
 
     def parallelize(self, device_map=None):
@@ -1589,6 +1329,7 @@ class FPT2LMHeadModel(FPT2PreTrainedModel):
     def get_edges(self):
         return self.transformer.get_edges()
     
+    '''
     @torch.no_grad()
     def add_or_remove_edge(self, from_node, to_node, remove=False, value=None):
         return self.transformer.add_or_remove_edge(from_node, to_node, remove=remove, value=value)
@@ -1630,7 +1371,7 @@ class FPT2LMHeadModel(FPT2PreTrainedModel):
                         pass
 
         print("Log_alpha initialization complete.")
-
+        '''
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,

@@ -469,6 +469,7 @@ class FPT2Block(nn.Module):
         config, 
         layer_idx=None,
         with_embedding_nodes=False,
+        initial_scores: Optional[dict] = None,
     ):
         super().__init__()
         hidden_size = config.hidden_size
@@ -493,14 +494,15 @@ class FPT2Block(nn.Module):
         self.edge_threshold_for_deterministic = None
         self.node_threshold_for_deterministic = None
         
-        self.q_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, self.n_head, dtype=self._dtype))
-        self.k_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, self.n_head, dtype=self._dtype))
-        self.v_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, self.n_head, dtype=self._dtype))
-        self.mlp_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, dtype=self._dtype))
-        self.q_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.k_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.v_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.mlp_read_log_alphas.data.normal_(mean=10.0, std=0.01)
+        self.q_read_log_alphas = nn.Parameter(torch.tensor(initial_scores[f"block.{layer_idx}.attn.W_Q"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.k_read_log_alphas = nn.Parameter(torch.tensor(initial_scores[f"block.{layer_idx}.attn.W_K"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.v_read_log_alphas = nn.Parameter(torch.tensor(initial_scores[f"block.{layer_idx}.attn.W_V"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.mlp_read_log_alphas = nn.Parameter(torch.tensor(initial_scores[f"block.{layer_idx}.mlp.W_in"], dtype=self._dtype).view(self.n_writers))
+
+        o_scores = []
+        mlp_out_scores = initial_scores['OUT']
+        for edge_scores in initial_scores['IN']:
+            mlp_in_scores.append(score_to_log_alpha(edge_score))
         
         self.attn_write_log_alphas = nn.Parameter(torch.empty(self.n_head))
         self.mlp_write_log_alphas = nn.Parameter(torch.empty(1))

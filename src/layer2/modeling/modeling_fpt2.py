@@ -499,10 +499,6 @@ class FPT2Block(nn.Module):
         self.v_read_log_alphas = nn.Parameter(torch.tensor(initial_scores[f"block.{layer_idx}.attn.W_V"], dtype=self._dtype).view(self.n_writers, self.n_head))
         self.mlp_read_log_alphas = nn.Parameter(torch.tensor(initial_scores[f"block.{layer_idx}.mlp.W_in"], dtype=self._dtype).view(self.n_writers))
 
-        o_scores = []
-        mlp_out_scores = initial_scores['OUT']
-        for edge_scores in initial_scores['IN']:
-            mlp_in_scores.append(score_to_log_alpha(edge_score))
         
         self.attn_write_log_alphas = nn.Parameter(torch.empty(self.n_head))
         self.mlp_write_log_alphas = nn.Parameter(torch.empty(1))

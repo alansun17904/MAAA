@@ -470,8 +470,8 @@ class FPT2Block(nn.Module):
         config, 
         layer_idx=None,
         with_embedding_nodes=False,
-        read_scores: Optional[dict] = None,
-        write_scores: Optional[dict] = None,
+        reading_scores: Optional[dict] = None,
+        writing_scores: Optional[dict] = None,
     ):
         super().__init__()
         hidden_size = config.hidden_size
@@ -496,14 +496,14 @@ class FPT2Block(nn.Module):
         self.edge_threshold_for_deterministic = None
         self.node_threshold_for_deterministic = None
         
-        self.q_read_log_alphas = nn.Parameter(torch.tensor(read_scores[f"block.{layer_idx}.attn.W_Q"], dtype=self._dtype).view(self.n_writers, self.n_head))
-        self.k_read_log_alphas = nn.Parameter(torch.tensor(read_scores[f"block.{layer_idx}.attn.W_K"], dtype=self._dtype).view(self.n_writers, self.n_head))
-        self.v_read_log_alphas = nn.Parameter(torch.tensor(read_scores[f"block.{layer_idx}.attn.W_V"], dtype=self._dtype).view(self.n_writers, self.n_head))
-        self.mlp_read_log_alphas = nn.Parameter(torch.tensor(read_scores[f"block.{layer_idx}.mlp.W_in"], dtype=self._dtype).view(self.n_writers))
+        self.q_read_log_alphas = nn.Parameter(torch.tensor(reading_scores[f"block.{layer_idx}.attn.W_Q"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.k_read_log_alphas = nn.Parameter(torch.tensor(reading_scores[f"block.{layer_idx}.attn.W_K"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.v_read_log_alphas = nn.Parameter(torch.tensor(reading_scores[f"block.{layer_idx}.attn.W_V"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.mlp_read_log_alphas = nn.Parameter(torch.tensor(reading_scores[f"block.{layer_idx}.mlp.W_in"], dtype=self._dtype).view(self.n_writers))
 
         
-        self.attn_write_log_alphas = nn.Parameter(torch.tensor(write_scores[f"block.{layer_idx}.attn.W_O"]).view(self.n_head))
-        self.mlp_write_log_alphas = nn.Parameter(torch.tensor(write_scores[f"block.{layer_idx}.mlp.W_out"]).view(1))
+        self.attn_write_log_alphas = nn.Parameter(torch.tensor(writing_scores[f"block.{layer_idx}.attn.W_O"]).view(self.n_head))
+        self.mlp_write_log_alphas = nn.Parameter(torch.tensor(writing_scores[f"block.{layer_idx}.mlp.W_out"]).view(1))
         
         attn_read_common_mask = torch.zeros(self.n_writers, dtype=self._dtype)
         attn_read_common_mask[:self.attn_writer_offset] = 1

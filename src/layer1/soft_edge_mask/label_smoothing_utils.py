@@ -85,8 +85,10 @@ def compute_edge_scores(z_star: dict) -> dict:
                 print(comp_j)
                 print(writer_name_to_idx(namej, layerj, headj, 12, 12))
             '''
+            def score_to_log_alpha(score):
+                return 10.0 + (score - 0.5) * 5.0
             score = round(math.sqrt(z_star[comp_i] * z_star[comp_j]), 4)
-            temp[writer_name_to_idx(namej, layerj, headj, 12, 12)] = score
+            temp[writer_name_to_idx(namej, layerj, headj, 12, 12)] = score_to_log_alpha(score)
         edge_scores[name][head] = temp
     return edge_scores, writers
 

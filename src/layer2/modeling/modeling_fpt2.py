@@ -501,8 +501,8 @@ class FPT2Block(nn.Module):
         self.mlp_read_log_alphas = nn.Parameter(torch.tensor(read_scores[f"block.{layer_idx}.mlp.W_in"], dtype=self._dtype).view(self.n_writers))
 
         
-        self.attn_write_log_alphas = nn.Parameter(torch.tensor(write_scores[f"block.{layer_idx}.attn.W_O"].view(self.n_head)))
-        self.mlp_write_log_alphas = nn.Parameter(torch.tensor(write_scores[f"block.{layer_idx}.mlp.W_out"].view(1)))
+        self.attn_write_log_alphas = nn.Parameter(torch.tensor(write_scores[f"block.{layer_idx}.attn.W_O"]).view(self.n_head))
+        self.mlp_write_log_alphas = nn.Parameter(torch.tensor(write_scores[f"block.{layer_idx}.mlp.W_out"]).view(1))
         
         attn_read_common_mask = torch.zeros(self.n_writers, dtype=self._dtype)
         attn_read_common_mask[:self.attn_writer_offset] = 1

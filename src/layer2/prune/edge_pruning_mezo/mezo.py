@@ -9,6 +9,7 @@ import sys
 
 from typing import Optional
 from dataclasses import dataclass, field
+import wandb
 
 
 
@@ -188,7 +189,7 @@ if is_accelerate_available():
         from accelerate.utils import DeepSpeedSchedulerWrapper
 
 
-logger = logging_py.get_logger(__name__)
+logger = logging_py.getLogger(__name__)
 
 zo_random_seed = np.random.randint(1000000000)
 
@@ -217,6 +218,15 @@ class MeZOTrainer(Seq2SeqTrainer):
     # Transformers.Trainer._inner_training_loop were made
     # used Transformers version 4.45.2
     # added "End Mezo addition" to show where changes ended
+
+    def __init__(self, *args, **kwargs):
+
+        self.edge_learning_rate = kwargs.pop('edge_learning_rate', 1e-3)
+        self.layer_learning_rate = kwargs.pop('layer_learning_rate', 1e-3)
+        self.reg_edge_learning_rate = kwargs.pop('reg_edge_learning_rate', 1e-3)
+        self.reg_layer_learning_rate = kwargs.pop('reg_layer_learning_rate', 1e-3)
+        
+        super().__init__(*args, **kwargs)
 
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
@@ -545,13 +555,17 @@ class MeZOTrainer(Seq2SeqTrainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-
+                # MARK: MeZO 1
                 # MeZO added: estimate gradient
-                if args.trainer =='zo':
-                    tr_loss_step = self.zo_step(model, inputs)
-                else:
+                if args.trainer != 'zo':
                     with self.accelerator.accumulate(model):
                         tr_loss_step = self.training_step(model, inputs)
+                    wandb.log({"Backprop Loss Step" : tr_loss_step}) # DEBUG ADDITION
+                if args.trainer =='zo' or args.trainer == 'zo_debug':
+                    tr_loss_step = self.zo_step(model, inputs)
+                    wandb.log({"MEZO Loss Step" : tr_loss_step}) # DEBUG ADDITION
+                
+                    
                 
                 # End Mezo addition
 
@@ -584,6 +598,7 @@ class MeZOTrainer(Seq2SeqTrainer):
                     # MeZO added: update model with the estimated gradient
                     # not sure if the first if statement in the following else block should be 
                     # included in MeZO block
+                    # MARK: MeZO 2
                     if args.trainer == "zo":
                         self.zo_update(model)
                     else:
@@ -768,7 +783,7 @@ class MeZOTrainer(Seq2SeqTrainer):
         with torch.inference_mode():
             inputs = self._prepare_inputs(inputs)
             with self.compute_loss_context_manager():
-                loss = self.compute_loss(model, inputs)
+                loss = self.compute_loss(model, inputs, mezo=True)
             if self.args.n_gpu > 1:
                 # Warning: this is copied from the original Huggingface Trainer. Untested.
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -851,6 +866,20 @@ class MeZOTrainer(Seq2SeqTrainer):
         self.zo_perturb_parameters(scaling_factor=1)
         
         return loss1
+    
+    def zo_get_lr(self, group):
+        # lr = 0
+        # if group == 1:
+        #     lr = self.edge_learning_rate
+        # if group == 2:
+        #     lr = self.reg_edge_learning_rate
+        # if group == 3:
+        #     lr = self.layer_learning_rate
+        # if group == 4:
+        #     lr = self.reg_layer_learning_rate
+        # return lr
+
+        return self.lr_scheduler.get_last_lr()[group-1]
 
 
     def zo_update(self, model):
@@ -862,13 +891,22 @@ class MeZOTrainer(Seq2SeqTrainer):
         # Reset the random seed for sampling zs
         torch.manual_seed(self.zo_random_seed)     
 
+
         for name, param in self.named_parameters_to_optim:
             # Resample z
             z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
-            if "bias" not in name and "layer_norm" not in name and "layernorm" not in name:
-                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z + args.weight_decay * param.data)
+            if 'sparsity_lambda_edge' in name: # implement no node loss
+                param.data = param.data + self.zo_get_lr(2) * (self.projected_grad * z)
+                # print(f'LAMBDA EDGE LR: {self.zo_get_lr(2)}')
+            elif 'sparsity_lambda_node' in name:
+                param.data = param.data + self.zo_get_lr(4) * (self.projected_grad * z)
+                # print(f'LAMBDA NODE LR: {self.zo_get_lr(2)}')
+            elif "bias" not in name and "layer_norm" not in name and "layernorm" not in name: # what is that --> should we be fixign this?
+                param.data = param.data - self.zo_get_lr(1) * (self.projected_grad * z + args.weight_decay * param.data)
+                # print(f'Bias LR: {self.zo_get_lr(1)}')
             else:
-                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z)
+                param.data = param.data - self.zo_get_lr(1) * (self.projected_grad * z) # where does self._get_learning_rate() interface w/ the multiple LRs
+                # print(f'Other LR: {self.zo_get_lr(1)}')
 
         self.lr_scheduler.step()
     

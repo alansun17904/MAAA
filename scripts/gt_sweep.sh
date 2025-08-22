@@ -69,7 +69,7 @@ WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/main_gt.
     --with_embedding_nodes \
     --trainer zo \
     --seed 1000000 \
-    --zo_eps 0.001
+    --zo_eps 0.001 \
     $EXTRA
 
 done

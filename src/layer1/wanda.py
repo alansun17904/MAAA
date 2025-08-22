@@ -97,16 +97,15 @@ def prepare_calibration_input_tlens(model: HookedTransformer, dataloader, corrda
 
 def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
     print("loading calibdation data")
-    dataloader, _, corrdataloader, _ = get_loaders("ioi",nsamples=args.nsamples,seed=args.seed,seqlen=25, model=model)
+    dataloader, _, corrdataloader, _ = get_loaders("ioi",nsamples=args.prune_nsamples,seed=args.prune_seed,seqlen=25, model=model)
     print("dataset loading complete")
 
-    inps, outs, all_tokens, all_corr_tokens = prepare_calibration_input_tlens(model, dataloader, corrdataloader, seqlen=25, max_samples=args.nsamples, device = device)
+    inps, outs, all_tokens, all_corr_tokens = prepare_calibration_input_tlens(model, dataloader, corrdataloader, seqlen=25, max_samples=args.prune_nsamples, device = device)
 
     inps, outs, all_tokens, all_corr_tokens = inps.to(device), outs.to(device), all_tokens.to(device), all_corr_tokens.to(device)
 
     model = model.to(device)
 
-    n_ctx = model.cfg.n_ctx
     n_layers = model.cfg.n_layers
     global_matrix_scores = []  # List of {layer, name, head_idx, score, mask}
     
@@ -350,5 +349,5 @@ def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
 #    global_matrix_scores = dict(sorted(global_matrix_scores.items(), key=lambda item: item[1]["score"], reverse=True))
 
     global_matrix_scores.extend(mlps)
-
+    global_matrix_scores.extend([{"name" : "embed", "mask" : 1}, {"name" : "unembed", "mask" : 1}])
     return global_matrix_scores

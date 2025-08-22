@@ -8,18 +8,18 @@ def compute_z_star(pruneinfo: list, alpha: float = 0.1) -> dict:
     Output: {"block.0.attn.W_0": 0.9, ...}
     """
     return {
-        f"{info['name']}[{info['head_idx']}]" if "mlp" not in info['name'] else info['name']  : (1 - alpha if info["mask"] == 1 else alpha)
+        f"{info['name']}[{info['head_idx']}]" if "mlp" not in info['name'] and "embed" not in info['name'] and "unembed" not in info['name'] else info['name']  : (1 - alpha if info["mask"] == 1 else alpha)
         for info in pruneinfo
     }
 def writer_name_to_idx(name, layer_idx, head_idx, num_layers, num_heads, with_embedding_nodes=False):
     idx = 0
     if with_embedding_nodes:
-        if name == "tok_embeds":
+        if name == "embed":
             return 0
-        elif name == "pos_embeds":
-            return 1
+        elif name == "unembed":
+            return 157
         else:
-            idx += 2
+            idx += 1
     if "W_out" in name:
         idx += layer_idx * (num_heads + 1) + num_heads
     elif "W_O" in name:
@@ -41,6 +41,8 @@ def compute_edge_scores(z_star: dict) -> dict:
     edge_scores = {}
     writers = {}
     for comp_i in components:
+        if "em" in comp_i or "unem" in comp_i:
+            continue
         if "W_O" in comp_i or "W_out" in comp_i:
             head = 0
             name = comp_i
@@ -53,7 +55,6 @@ def compute_edge_scores(z_star: dict) -> dict:
                     writers[name].extend([None] * 11)
             writers[name][head] = z_star[comp_i]
             continue
-        layeri = int(comp_i.split(".")[1])
         head = 0
         name = comp_i
         if "W_in" not in comp_i:
@@ -68,16 +69,17 @@ def compute_edge_scores(z_star: dict) -> dict:
         
         temp = []
         
-        temp.extend([None] * get_num_writers(layeri))
+        temp.extend([None] * get_num_writers(12, True))
         for comp_j in components: #Really inefficient frn but whatever
-            layerj = int(comp_j.split(".")[1])
+            if "em" not in comp_j:
+                layerj = int(comp_j.split(".")[1])
             headj = 0
             namej = comp_j
             
-            if (comp_i == comp_j) or (layerj >= layeri) or ("W_out" not in comp_j and ("W_O" not in comp_j)):
+            if (comp_i == comp_j) or ("W_out" not in comp_j and ("W_O" not in comp_j) and "em" not in comp_j):
                 continue  # skips if not writer
             
-            if "W_out" not in comp_j:
+            if "W_out" not in comp_j and "em" not in comp_j:
                 namej = comp_j.split("[")[0]
                 headj = int(comp_j.split("[")[-1].split("]")[0])
             '''
@@ -85,9 +87,7 @@ def compute_edge_scores(z_star: dict) -> dict:
                 print(comp_j)
                 print(writer_name_to_idx(namej, layerj, headj, 12, 12))
             '''
-            def score_to_log_alpha(score):
-                return 10.0 + (score - 0.5) * 5.0
             score = round(math.sqrt(z_star[comp_i] * z_star[comp_j]), 4)
-            temp[writer_name_to_idx(namej, layerj, headj, 12, 12)] = score_to_log_alpha(score)
+            temp[writer_name_to_idx(namej, layerj, headj, 12, 12, True)] = score
         edge_scores[name][head] = temp
     return edge_scores, writers

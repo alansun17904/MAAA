@@ -62,8 +62,8 @@ from transformers.utils.versions import require_version
 
 import torch.nn as nn
 from torch.optim import AdamW
-
-from mezo import MeZOTrainer, MeZOTrainingArguments
+from . import mezo
+from .mezo import MeZOTrainer, MeZOTrainingArguments
 
 import sys
 sys.path.append(

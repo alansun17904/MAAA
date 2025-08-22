@@ -1,7 +1,7 @@
 import argparse
 import json
 
-from label_smoothing_utils import load_mask, compute_z_star, compute_edge_scores
+from src.layer1.label_smoothing_utils import load_mask, compute_z_star, compute_edge_scores
 
 def main():
     parser = argparse.ArgumentParser(description="Generate soft edge scores from a Wanda pruning mask.")

@@ -91,15 +91,3 @@ def compute_edge_scores(z_star: dict) -> dict:
             temp[writer_name_to_idx(namej, layerj, headj, 12, 12)] = score_to_log_alpha(score)
         edge_scores[name][head] = temp
     return edge_scores, writers
-
-def load_mask(filepath: str) -> dict:
-    """
-    This is for loading the new Wanda pruning mask (Aaron's output) :
-    {
-      "block.0.attn.W_0": {"score": 1.234, "mask": 1},
-      "block.0.attn.W_1": {"score": 0.823, "mask": 0},
-      ...
-    }
-    """
-    with open(filepath, "r") as f:
-        return json.load(f)

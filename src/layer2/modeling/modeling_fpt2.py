@@ -1460,12 +1460,16 @@ class FPT2LMHeadModel(FPT2PreTrainedModel):
         config,
         with_embedding_nodes=False,
         disable_linear_regularization_term=False,
+        reading_scores: Optional[dict] = None,
+        writing_scores: Optional[dict] = None,
     ):
         super().__init__(config)
         self.transformer = FPT2Model(
             config,
             with_embedding_nodes=with_embedding_nodes,
             disable_linear_regularization_term=disable_linear_regularization_term,
+            reading_scores=reading_scores,
+            writing_scores=writing_scores,
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 

@@ -1,5 +1,6 @@
 import math
 from .data import get_loaders 
+import torch
 import torch.nn as nn
 import transformers
 from tqdm import tqdm

@@ -469,7 +469,8 @@ class FPT2Block(nn.Module):
         config, 
         layer_idx=None,
         with_embedding_nodes=False,
-        initial_scores: Optional[dict] = None,
+        read_scores: Optional[dict] = None,
+        write_scores: Optional[dict] = None,
     ):
         super().__init__()
         hidden_size = config.hidden_size
@@ -494,16 +495,14 @@ class FPT2Block(nn.Module):
         self.edge_threshold_for_deterministic = None
         self.node_threshold_for_deterministic = None
         
-        self.q_read_log_alphas = nn.Parameter(torch.tensor(initial_scores[f"block.{layer_idx}.attn.W_Q"], dtype=self._dtype).view(self.n_writers, self.n_head))
-        self.k_read_log_alphas = nn.Parameter(torch.tensor(initial_scores[f"block.{layer_idx}.attn.W_K"], dtype=self._dtype).view(self.n_writers, self.n_head))
-        self.v_read_log_alphas = nn.Parameter(torch.tensor(initial_scores[f"block.{layer_idx}.attn.W_V"], dtype=self._dtype).view(self.n_writers, self.n_head))
-        self.mlp_read_log_alphas = nn.Parameter(torch.tensor(initial_scores[f"block.{layer_idx}.mlp.W_in"], dtype=self._dtype).view(self.n_writers))
+        self.q_read_log_alphas = nn.Parameter(torch.tensor(read_scores[f"block.{layer_idx}.attn.W_Q"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.k_read_log_alphas = nn.Parameter(torch.tensor(read_scores[f"block.{layer_idx}.attn.W_K"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.v_read_log_alphas = nn.Parameter(torch.tensor(read_scores[f"block.{layer_idx}.attn.W_V"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.mlp_read_log_alphas = nn.Parameter(torch.tensor(read_scores[f"block.{layer_idx}.mlp.W_in"], dtype=self._dtype).view(self.n_writers))
 
         
-        self.attn_write_log_alphas = nn.Parameter(torch.empty(self.n_head))
-        self.mlp_write_log_alphas = nn.Parameter(torch.empty(1))
-        self.attn_write_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.mlp_write_log_alphas.data.normal_(mean=10.0, std=0.01)
+        self.attn_write_log_alphas = nn.Parameter(torch.tensor(write_scores[f"block.{layer_idx}.attn.W_O"].view(self.n_head)))
+        self.mlp_write_log_alphas = nn.Parameter(torch.tensor(write_scores[f"block.{layer_idx}.mlp.W_out"].view(1)))
         
         attn_read_common_mask = torch.zeros(self.n_writers, dtype=self._dtype)
         attn_read_common_mask[:self.attn_writer_offset] = 1
@@ -818,6 +817,8 @@ class FPT2Model(FPT2PreTrainedModel):
         config,
         with_embedding_nodes=False,
         disable_linear_regularization_term=False,
+        reading_scores: Optional[dict] = None,
+        writing_scores: Optional[dict] = None,
     ):
         super().__init__(config)
 
@@ -825,12 +826,15 @@ class FPT2Model(FPT2PreTrainedModel):
 
         self.wte = nn.Embedding(config.vocab_size, self.embed_dim)
         self.wpe = nn.Embedding(config.max_position_embeddings, self.embed_dim)
+        
 
         self.h = nn.ModuleList([
             FPT2Block(
                 config, 
                 layer_idx=i,
                 with_embedding_nodes=with_embedding_nodes,
+                reading_scores=reading_scores,
+                writing_scores=writing_scores,
             ) for i in range(config.num_hidden_layers)
         ])
         self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)

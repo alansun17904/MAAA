@@ -33,6 +33,7 @@ N_VAL=150 # The val split size
 WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/main_gt.py \
     --prune_sparsity .86 \
     --prune_nsamples 128 \
+    --alpha 0.25 \
     --report_to wandb \
     --run_name "gt-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}-$(date +%Y%m%d_%H%M%S)" \
     --do_train \

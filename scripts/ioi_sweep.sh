@@ -32,6 +32,7 @@ N_VAL=200 # The val split size
 WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/main_ioi.py \
     --prune_sparsity .86 \
     --prune_nsamples 128 \
+    --alpha 0.25 \
     --report_to wandb \
     --do_train \
     --do_eval \

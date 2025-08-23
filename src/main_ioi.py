@@ -53,6 +53,10 @@ class PruningArguments:
         default=0.86,
         metadata={"help": "Target sparsity for pruning."},
     ),
+    alpha: Optional[float] = field(
+        default=0.25,
+        metadata={"help": "Alpha parameter for computing z-star."},
+    ),
 
 
 def main():
@@ -72,7 +76,7 @@ def main():
 
     prune_args.prune_seed = training_args.seed
     w = prune_wanda(prune_args, model, sparsity=prune_args.prune_sparsity)
-    w = compute_z_star(w, alpha=0.1)
+    w = compute_z_star(w, alpha=prune_args.alpha)
     reading_scores, writing_scores = compute_edge_scores(w)
 
 

@@ -135,10 +135,14 @@ def main():
         model_args.initialize_from,
         with_embedding_nodes=data_args.with_embedding_nodes,
         disable_linear_regularization_term=data_args.disable_linear_reg_term,
+        reading_scores = reading_scores,
+        writing_scores = writing_scores,
     )
     gpt2_model = FPT2LMHeadModel.from_pretrained(
         "gpt2",
         with_embedding_nodes=data_args.with_embedding_nodes,
+        reading_scores = reading_scores,
+        writing_scores = writing_scores,
     ).to("cuda")
     
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -221,101 +225,6 @@ def main():
     else:
         trainer.create_model_card(**kwargs)
     
-    model = FPT2LMHeadModel.from_pretrained(
-        model_args.initialize_from,
-        with_embedding_nodes=data_args.with_embedding_nodes,
-        disable_linear_regularization_term=data_args.disable_linear_reg_term,
-        reading_scores = reading_scores,
-        writing_scores = writing_scores,
-    )
-    gpt2_model = FPT2LMHeadModel.from_pretrained(
-        "gpt2",
-        with_embedding_nodes=data_args.with_embedding_nodes,
-        reading_scores = reading_scores,
-        writing_scores = writing_scores,
-    ).to("cuda")
-    
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    tokenizer.pad_token = tokenizer.eos_token
-    
-    freeze_all_except_pruning_params(model)
-
-    if training_args.do_train:
-        if "train" not in raw_datasets:
-            raise ValueError("--do_train requires a train dataset")
-        train_dataset = raw_datasets["train"]
-
-    if training_args.do_eval:
-        # We don't have a validation dataset, so we'll just use the test dataset.
-        if "validation" not in raw_datasets:
-            raise ValueError("--do_eval requires a validation dataset")
-        eval_dataset = raw_datasets["validation"]
-
-    # Data collator
-    collator = DataCollatorIOI(
-        tokenizer=tokenizer,
-        max_length=data_args.max_seq_length
-    )
-    
-    optimizers = get_optimizers(
-        model, 
-        edges_lr=data_args.edge_learning_rate,
-        layers_lr=data_args.layer_learning_rate,
-        reg_edges_lr=data_args.reg_edge_learning_rate,
-        reg_layers_lr=data_args.reg_layer_learning_rate,
-        num_training_steps=training_args.max_steps,
-        warmup_steps=training_args.warmup_steps,
-        disable_node_loss=data_args.disable_node_loss
-    )
-
-    # Initialize our Trainer
-    trainer = FPT2InfoTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        gpt2_model=gpt2_model,
-        data_collator=collator,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
-        compute_metrics=eval_fn,
-        optimizers=optimizers,
-        start_edge_sparsity=data_args.start_edge_sparsity,
-        target_edge_sparsity=data_args.target_edge_sparsity,
-        start_layer_sparsity=data_args.start_layer_sparsity,
-        target_layer_sparsity=data_args.target_layer_sparsity,
-        skip_layer_loss_if_higher_sparsity=data_args.stop_optimizing_layer_if_higher_sparsity,
-        num_sparsity_warmup_steps=data_args.num_sparsity_warmup_steps,
-        warmup_type=data_args.warmup_type,
-    )
-
-    # Training
-    if training_args.do_train:
-        checkpoint = None
-        if training_args.resume_from_checkpoint is not None:
-            checkpoint = training_args.resume_from_checkpoint
-        elif last_checkpoint is not None:
-            checkpoint = last_checkpoint
-        train_result = trainer.train(
-            resume_from_checkpoint=checkpoint,
-        )
-        metrics = train_result.metrics
-        max_train_samples = (
-            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
-        )
-        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
-
-        trainer.save_model()  # Saves the tokenizer too for easy upload
-
-        trainer.log_metrics("train", metrics)
-        trainer.save_metrics("train", metrics)
-        trainer.save_state()
-
-    kwargs = {"finetuned_from": "gpt-2"}
-
-    if training_args.push_to_hub:
-        trainer.push_to_hub(**kwargs)
-    else:
-        trainer.create_model_card(**kwargs)
 def _mp_fn(index):
     # For xla_spawn (TPUs)
     main()

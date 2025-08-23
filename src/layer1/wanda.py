@@ -157,7 +157,7 @@ def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
             f"blocks.{i}.attn.hook_z",         # Input to O matrix
             f"blocks.{i}.mlp.hook_post",       # Output of MLP (for out matrix)
         ]
-        for j in range(args.nsamples):
+        for j in range(args.prune_nsamples):
             
             with torch.no_grad():
                 _, cache = model.run_with_cache(all_tokens[j], names_filter=hook_points) #Has to be in here cuz too much memory outside of loop

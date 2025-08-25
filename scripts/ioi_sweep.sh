@@ -2,8 +2,10 @@
 EDGE_SPARSITIES=(0.95)
 for i in "${!EDGE_SPARSITIES[@]}"; do
 
+PRUNE_SPARSITY = 0.82
+ALPHA = .1
 EDGE_SPARSITY=${EDGE_SPARSITIES[i]}
-NODE_SPARSITY=0.68
+NODE_SPARSITY=0.72
 ELR=1
 LLR=1
 RELR=1
@@ -30,9 +32,9 @@ N_VAL=200 # The val split size
 # That flag, when set, also models masks over the embedding nodes
 
 WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/main_ioi.py \
-    --prune_sparsity .86 \
+    --prune_sparsity ${PRUNE_SPARSITY} \
     --prune_nsamples 128 \
-    --alpha 0.25 \
+    --alpha ${ALPHA} \
     --report_to wandb \
     --do_train \
     --do_eval \
@@ -62,7 +64,7 @@ WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/main_ioi
     --num_sparsity_warmup_steps $WARMUP \
     --max_train_samples $N_TRAIN \
     --max_eval_samples $N_VAL \
-    --output_dir ./data/runs/ioi-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-t${TOTAL}/ \
+    --output_dir ./data/runs/ioi-${VERSION}-${TAG}-elr${ELR}-llr${LLR}-relr${RELR}-rllr${RLLR}-es${EDGE_SPARSITY}-ns${NODE_SPARSITY}-ps${PRUNE_SPARSITY}-a${ALPHA}-t${TOTAL}/ \
     --remove_unused_columns false \
     --dataloader_num_workers 0 \
     --warmup_type linear \

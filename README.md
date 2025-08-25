@@ -12,7 +12,8 @@ Install conda (skip if already installed).
 2. Run `wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh`
 3. Run `bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3`
 4. Run `rm ~/miniconda3/miniconda.sh`
-5. Run `source ~/.bashrc`
+5. Run `~/miniconda3/bin/conda init`
+6. Run `source ~/.bashrc`
 
 
 # Setup Environment
@@ -20,6 +21,11 @@ Install conda (skip if already installed).
 1. Run the following command: `conda env create -f environment.yml`
 2. Run `conda activate MAAA_CD`
 3. Unzip data.zip
+
+# If Environment in Notebook
+
+1. `conda install ipykernel`
+2. `python -m ipykernel install --user --name=myenv --display-name "MAAA_CD"`
 
 
 ## Run Experiments

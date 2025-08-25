@@ -1,3 +1,4 @@
+import copy
 import math
 from packaging import version
 import importlib
@@ -9,7 +10,6 @@ import sys
 
 from typing import Optional
 from dataclasses import dataclass, field
-import wandb
 
 
 
@@ -131,6 +131,7 @@ from transformers.utils.generic import ContextManagers
 
 
 
+
 if is_apex_available():
     from apex import amp
 
@@ -209,6 +210,7 @@ def _is_peft_model(model):
 
 
 
+
 class MeZOTrainer(Seq2SeqTrainer):
     # MAAA
 
@@ -218,15 +220,52 @@ class MeZOTrainer(Seq2SeqTrainer):
     # Transformers.Trainer._inner_training_loop were made
     # used Transformers version 4.45.2
     # added "End Mezo addition" to show where changes ended
-
-    def __init__(self, *args, **kwargs):
-
-        self.edge_learning_rate = kwargs.pop('edge_learning_rate', 1e-3)
-        self.layer_learning_rate = kwargs.pop('layer_learning_rate', 1e-3)
-        self.reg_edge_learning_rate = kwargs.pop('reg_edge_learning_rate', 1e-3)
-        self.reg_layer_learning_rate = kwargs.pop('reg_layer_learning_rate', 1e-3)
         
+    def __init__(self, *args, **kwargs):
+        self.original_model = kwargs.pop("original_model", None)
         super().__init__(*args, **kwargs)
+
+
+    def compute_loss(
+            self, model, inputs, return_outputs=False
+    ):
+        labels = inputs.pop("labels")
+            
+        outputs = model.generate(**inputs, max_new_tokens=self.args.generation_max_length, return_dict_in_generate=True, output_logits=True)
+
+        model_sft = nn.functional.log_softmax(torch.transpose(torch.stack(outputs.logits), 0, 1), dim=1)
+        corr_sft = nn.functional.log_softmax(labels['corr_logits'], dim=1)
+
+        # Save past state if it exists
+        # TODO: this needs to be fixed and made cleaner later.
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+
+        if labels is not None:
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            if _is_peft_model(unwrapped_model):
+                model_name = unwrapped_model.base_model.model._get_name()
+            else:
+                model_name = unwrapped_model._get_name()
+            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+                kl = nn.functional.kl_div(model_sft, corr_sft, reduction='sum', log_target=True)
+                loss = kl + self.args.lambda_train * self.l2_norm_calculation(self.args.original_model, self.model) # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
+                # plus lambda * the difference in model weights
+            else:
+                kl = nn.functional.kl_div(model_sft, corr_sft, reduction='sum', log_target=True)
+                loss = kl + self.args.lambda_train * self.l2_norm_calculation(self.args.original_model, self.model) # kl-divergence between output (model logits) and label (response from model given counterfactual input) 
+                # plus lambda * the difference in model weights
+        else:
+            raise Exception('There are no training labels')
+            if isinstance(outputs, dict) and "loss" not in outputs:
+                raise ValueError(
+                    "The model did not return a loss from the inputs, only the following keys: "
+                    f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
+                )
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+
+        return (loss, outputs) if return_outputs else loss
 
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
@@ -555,17 +594,13 @@ class MeZOTrainer(Seq2SeqTrainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                # MARK: MeZO 1
+
                 # MeZO added: estimate gradient
-                if args.trainer != 'zo':
+                if args.trainer =='zo':
+                    tr_loss_step = self.zo_step(model, inputs)
+                else:
                     with self.accelerator.accumulate(model):
                         tr_loss_step = self.training_step(model, inputs)
-                    wandb.log({"Backprop Loss Step" : tr_loss_step}) # DEBUG ADDITION
-                if args.trainer =='zo' or args.trainer == 'zo_debug':
-                    tr_loss_step = self.zo_step(model, inputs)
-                    wandb.log({"MEZO Loss Step" : tr_loss_step}) # DEBUG ADDITION
-                
-                    
                 
                 # End Mezo addition
 
@@ -598,7 +633,6 @@ class MeZOTrainer(Seq2SeqTrainer):
                     # MeZO added: update model with the estimated gradient
                     # not sure if the first if statement in the following else block should be 
                     # included in MeZO block
-                    # MARK: MeZO 2
                     if args.trainer == "zo":
                         self.zo_update(model)
                     else:
@@ -793,6 +827,7 @@ class MeZOTrainer(Seq2SeqTrainer):
         """
         This separate F1 function is used as non-differentiable metric for SQuAD
         """
+        raise Exception("Mistake - the F1 function in MeZO was called")
         if gold[0] == "CANNOTANSWER" or gold[0] == "no answer":
             return int(normalize_answer(gold[0]) == normalize_answer(pred))
         else:
@@ -866,20 +901,6 @@ class MeZOTrainer(Seq2SeqTrainer):
         self.zo_perturb_parameters(scaling_factor=1)
         
         return loss1
-    
-    def zo_get_lr(self, group):
-        # lr = 0
-        # if group == 1:
-        #     lr = self.edge_learning_rate
-        # if group == 2:
-        #     lr = self.reg_edge_learning_rate
-        # if group == 3:
-        #     lr = self.layer_learning_rate
-        # if group == 4:
-        #     lr = self.reg_layer_learning_rate
-        # return lr
-
-        return self.lr_scheduler.get_last_lr()[group-1]
 
 
     def zo_update(self, model):
@@ -891,24 +912,30 @@ class MeZOTrainer(Seq2SeqTrainer):
         # Reset the random seed for sampling zs
         torch.manual_seed(self.zo_random_seed)     
 
-
         for name, param in self.named_parameters_to_optim:
             # Resample z
             z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
-            if 'sparsity_lambda_edge' in name: # implement no node loss
-                param.data = param.data + self.zo_get_lr(2) * (self.projected_grad * z)
-                # print(f'LAMBDA EDGE LR: {self.zo_get_lr(2)}')
-            elif 'sparsity_lambda_node' in name:
-                param.data = param.data + self.zo_get_lr(4) * (self.projected_grad * z)
-                # print(f'LAMBDA NODE LR: {self.zo_get_lr(2)}')
-            elif "bias" not in name and "layer_norm" not in name and "layernorm" not in name: # what is that --> should we be fixign this?
-                param.data = param.data - self.zo_get_lr(1) * (self.projected_grad * z + args.weight_decay * param.data)
-                # print(f'Bias LR: {self.zo_get_lr(1)}')
+            if "bias" not in name and "layer_norm" not in name and "layernorm" not in name:
+                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z + args.weight_decay * param.data)
             else:
-                param.data = param.data - self.zo_get_lr(1) * (self.projected_grad * z) # where does self._get_learning_rate() interface w/ the multiple LRs
-                # print(f'Other LR: {self.zo_get_lr(1)}')
+                param.data = param.data - self._get_learning_rate() * (self.projected_grad * z)
 
         self.lr_scheduler.step()
+    
+    def l2_norm_calculation(model_a, model_b):
+        """
+        Computes the L2 norm of the difference between the weights of two HuggingFace models.
+        Assumes both models have the same architecture.
+        a-b
+        """
+        norm = 0.0
+        params_a = dict(model_a.named_parameters())
+        params_b = dict(model_b.named_parameters())
+        for name in params_a:
+            if name in params_b:
+                diff = params_a[name].data - params_b[name].data
+                norm += torch.norm(diff, p=2).item() ** 2
+        return norm ** 0.5
     
 @dataclass
 class MeZOTrainingArguments(Seq2SeqTrainingArguments):
@@ -924,4 +951,12 @@ class MeZOTrainingArguments(Seq2SeqTrainingArguments):
     non_diff: bool = field(
         default = False,
         metadata = {"help" : "Not sure exactly why. MeZO explanation: use non-differentiable objective (only support F1 for SQuAD for now)"},
+    )
+    lambda_train : int = field(
+        default=0.6, 
+        metadata={"help" : "The lambda value which defines how important the change in model weights is for the loss, compared to the KL divergence between model and corrupted outputs."},
+    )
+    original_model : PreTrainedModel = field(
+        default=None,
+        metadata={'help' : 'The base model (which has no training) to which the trained weights should be compared (for calculating change in model weights)'}
     )

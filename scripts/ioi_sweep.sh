@@ -1,14 +1,14 @@
 # EDGE_SPARSITIES=(0.94 0.945 0.95 0.955 0.96 0.965 0.97 0.975 0.98 0.985 0.99 0.995 1.0 1.01 1.02 1.05 1.1)
-EDGE_SPARSITIES=(0.94)
+EDGE_SPARSITIES=(0.95)
 for i in "${!EDGE_SPARSITIES[@]}"; do
 
 EDGE_SPARSITY=${EDGE_SPARSITIES[i]}
-NODE_SPARSITY=0.72
-ELR=0.8
-LLR=0.8
-RELR=0.8
-RLLR=0.8
-TOTAL=325 # 3000
+NODE_SPARSITY=0.68
+ELR=1
+LLR=1
+RELR=1
+RLLR=1
+TOTAL=150 # 3000
 WARMUP=75 # 2500
 
 EXTRA="--disable_node_loss"
@@ -17,7 +17,7 @@ TAG="wo_node_loss"
 # Uncomment this if you want to run with node loss
 # EXTRA=""
 # TAG="w_node_loss"
-VERSION="MAAA"
+VERSION="edge_pruning_mezo"
 
 train_split="train" # "train_400", "train_100k"
 N_TRAIN=300 # 1000000 # Set to a large value so all of the (200 / 400 / 100000) examples are used
@@ -29,7 +29,10 @@ N_VAL=200 # The val split size
 # If you want to always keep embedding nodes, remove the --with_embedding_nodes flag
 # That flag, when set, also models masks over the embedding nodes
 
-WANDB_MODE=disabled python src/layer2/prune/${VERSION}/fpt2_ioi.py \
+WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/main_ioi.py \
+    --prune_sparsity .86 \
+    --prune_nsamples 128 \
+    --alpha 0.25 \
     --report_to wandb \
     --do_train \
     --do_eval \
@@ -65,6 +68,8 @@ WANDB_MODE=disabled python src/layer2/prune/${VERSION}/fpt2_ioi.py \
     --warmup_type linear \
     --with_embedding_nodes \
     --trainer zo \
+    --seed 1000000 \
+    --zo_eps 0.001 \
     $EXTRA
 
 done

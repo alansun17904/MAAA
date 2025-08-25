@@ -20,6 +20,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
+import wandb
 
 import torch
 import torch.nn as nn
@@ -469,6 +470,8 @@ class FPT2Block(nn.Module):
         config, 
         layer_idx=None,
         with_embedding_nodes=False,
+        reading_scores: Optional[dict] = None,
+        writing_scores: Optional[dict] = None,
     ):
         super().__init__()
         hidden_size = config.hidden_size
@@ -493,19 +496,14 @@ class FPT2Block(nn.Module):
         self.edge_threshold_for_deterministic = None
         self.node_threshold_for_deterministic = None
         
-        self.q_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, self.n_head, dtype=self._dtype))
-        self.k_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, self.n_head, dtype=self._dtype))
-        self.v_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, self.n_head, dtype=self._dtype))
-        self.mlp_read_log_alphas = nn.Parameter(torch.empty(self.n_writers, dtype=self._dtype))
-        self.q_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.k_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.v_read_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.mlp_read_log_alphas.data.normal_(mean=10.0, std=0.01)
+        self.q_read_log_alphas = nn.Parameter(torch.tensor(reading_scores[f"block.{layer_idx}.attn.W_Q"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.k_read_log_alphas = nn.Parameter(torch.tensor(reading_scores[f"block.{layer_idx}.attn.W_K"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.v_read_log_alphas = nn.Parameter(torch.tensor(reading_scores[f"block.{layer_idx}.attn.W_V"], dtype=self._dtype).view(self.n_writers, self.n_head))
+        self.mlp_read_log_alphas = nn.Parameter(torch.tensor(reading_scores[f"block.{layer_idx}.mlp.W_in"], dtype=self._dtype).view(self.n_writers))
+
         
-        self.attn_write_log_alphas = nn.Parameter(torch.empty(self.n_head))
-        self.mlp_write_log_alphas = nn.Parameter(torch.empty(1))
-        self.attn_write_log_alphas.data.normal_(mean=10.0, std=0.01)
-        self.mlp_write_log_alphas.data.normal_(mean=10.0, std=0.01)
+        self.attn_write_log_alphas = nn.Parameter(torch.tensor(writing_scores[f"block.{layer_idx}.attn.W_O"]).view(self.n_head))
+        self.mlp_write_log_alphas = nn.Parameter(torch.tensor(writing_scores[f"block.{layer_idx}.mlp.W_out"]).view(1))
         
         attn_read_common_mask = torch.zeros(self.n_writers, dtype=self._dtype)
         attn_read_common_mask[:self.attn_writer_offset] = 1
@@ -820,6 +818,8 @@ class FPT2Model(FPT2PreTrainedModel):
         config,
         with_embedding_nodes=False,
         disable_linear_regularization_term=False,
+        reading_scores: Optional[dict] = None,
+        writing_scores: Optional[dict] = None,
     ):
         super().__init__(config)
 
@@ -827,12 +827,15 @@ class FPT2Model(FPT2PreTrainedModel):
 
         self.wte = nn.Embedding(config.vocab_size, self.embed_dim)
         self.wpe = nn.Embedding(config.max_position_embeddings, self.embed_dim)
+        
 
         self.h = nn.ModuleList([
             FPT2Block(
                 config, 
                 layer_idx=i,
                 with_embedding_nodes=with_embedding_nodes,
+                reading_scores=reading_scores,
+                writing_scores=writing_scores,
             ) for i in range(config.num_hidden_layers)
         ])
         self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
@@ -879,10 +882,14 @@ class FPT2Model(FPT2PreTrainedModel):
             self.register_buffer("sparsity_lambda_edges_1", sparsity_lambda_edges_1)
             self.register_buffer("sparsity_lambda_nodes_1", sparsity_lambda_nodes_1)
         else:
-            self.sparsity_lambda_edges_1 = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
-            self.sparsity_lambda_nodes_1 = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
-        self.sparsity_lambda_edges_2 = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
-        self.sparsity_lambda_nodes_2 = nn.Parameter(torch.tensor([0.0], dtype=self._dtype))
+            self.sparsity_lambda_edges_1 = nn.Parameter(torch.tensor([-4], dtype=self._dtype))
+            self.sparsity_lambda_nodes_1 = nn.Parameter(torch.tensor([-4], dtype=self._dtype))
+            # self.sparsity_lambda_edges_1 = torch.tensor([-4], dtype=self._dtype)
+            # self.sparsity_lambda_nodes_1 = torch.tensor([-4], dtype=self._dtype)
+        #self.sparsity_lambda_edges_2 = nn.Parameter(torch.tensor([0], dtype=self._dtype))
+        #self.sparsity_lambda_nodes_2 = nn.Parameter(torch.tensor([0], dtype=self._dtype))
+        self.sparsity_lambda_edges_2 = torch.tensor([0], dtype=self._dtype)
+        self.sparsity_lambda_nodes_2 = torch.tensor([0], dtype=self._dtype)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1393,6 +1400,24 @@ class FPT2Model(FPT2PreTrainedModel):
                 model_node_sparsity - target_node_sparsity
             )**2
         
+        wandb.log({
+            "Lambda Node 1" : self.sparsity_lambda_nodes_1.reshape([]), 
+            "Lambda Node 2" : self.sparsity_lambda_nodes_2.reshape([]),
+            "Lambda Edge 1:": self.sparsity_lambda_edges_1.reshape([]),
+            "Lambda Edge 2:": self.sparsity_lambda_edges_2.reshape([]),
+            "Model Edge Sparsity" : model_edge_sparsity,
+            "Model Node Sparsity" : model_node_sparsity,
+            })
+
+        # print(
+        #     f"Lambda Node 1: {self.sparsity_lambda_nodes_1.reshape([])}\n"
+        #     f"Lambda Node 2: {self.sparsity_lambda_nodes_2.reshape([])}\n"
+        #     f"Lambda Edge 1: {self.sparsity_lambda_edges_1.reshape([])}\n"
+        #     f"Lambda Edge 2: {self.sparsity_lambda_edges_2.reshape([])}"
+        # )
+        
+
+
         # Add last hidden state
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -1458,12 +1483,16 @@ class FPT2LMHeadModel(FPT2PreTrainedModel):
         config,
         with_embedding_nodes=False,
         disable_linear_regularization_term=False,
+        reading_scores: Optional[dict] = None,
+        writing_scores: Optional[dict] = None,
     ):
         super().__init__(config)
         self.transformer = FPT2Model(
             config,
             with_embedding_nodes=with_embedding_nodes,
             disable_linear_regularization_term=disable_linear_regularization_term,
+            reading_scores=reading_scores,
+            writing_scores=writing_scores,
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 

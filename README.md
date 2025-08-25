@@ -22,6 +22,11 @@ Install conda (skip if already installed).
 2. Run `conda activate MAAA_CD`
 3. Unzip data.zip
 
+# If Environment in Notebook
+
+1. `conda install ipykernel`
+2. `python -m ipykernel install --user --name=myenv --display-name "MAAA_CD"`
+
 
 ## Run Experiments
 

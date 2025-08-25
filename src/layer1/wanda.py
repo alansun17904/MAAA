@@ -97,15 +97,16 @@ def prepare_calibration_input_tlens(model: HookedTransformer, dataloader, corrda
 
 def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
     print("loading calibdation data")
-    dataloader, _, corrdataloader, _ = get_loaders("ioi",nsamples=args.prune_nsamples,seed=args.prune_seed,seqlen=25, model=model)
+    dataloader, _, corrdataloader, _ = get_loaders("ioi",nsamples=args.nsamples,seed=args.seed,seqlen=25, model=model)
     print("dataset loading complete")
 
-    inps, outs, all_tokens, all_corr_tokens = prepare_calibration_input_tlens(model, dataloader, corrdataloader, seqlen=25, max_samples=args.prune_nsamples, device = device)
+    inps, outs, all_tokens, all_corr_tokens = prepare_calibration_input_tlens(model, dataloader, corrdataloader, seqlen=25, max_samples=args.nsamples, device = device)
 
     inps, outs, all_tokens, all_corr_tokens = inps.to(device), outs.to(device), all_tokens.to(device), all_corr_tokens.to(device)
 
     model = model.to(device)
 
+    n_ctx = model.cfg.n_ctx
     n_layers = model.cfg.n_layers
     global_matrix_scores = []  # List of {layer, name, head_idx, score, mask}
     
@@ -157,8 +158,7 @@ def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
             f"blocks.{i}.attn.hook_z",         # Input to O matrix
             f"blocks.{i}.mlp.hook_post",       # Output of MLP (for out matrix)
         ]
-        for j in range(args.prune_nsamples):
-            
+        for j in range(args.nsamples):            
             with torch.no_grad():
                 _, cache = model.run_with_cache(all_tokens[j], names_filter=hook_points) #Has to be in here cuz too much memory outside of loop
                 _, corrcache = model.run_with_cache(all_corr_tokens[j], names_filter=hook_points)
@@ -170,7 +170,7 @@ def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
                     dims_to_reduce = tuple(range(activations.ndim - 1))
                     activations = (activations - activations.mean()) / (activations.std())
                     corractivations = (corractivations - corractivations.mean()) / (corractivations.std())
-                    norm = torch.norm((corractivations-activations), p=2, dim=dims_to_reduce) 
+                    norm = torch.norm((corractivations), p=2, dim=dims_to_reduce) - torch.norm((activations), p=2, dim=dims_to_reduce) 
                     
                     if "ln1.hook_normalized" in hook_name:
                         # This feeds into Q, K, V matrices
@@ -216,7 +216,8 @@ def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
             row_scaler = torch.sqrt(average_cache[name]["row_scaler"])
             row_scaler = row_scaler.mean()
 
-            W_metric = torch.abs(W) * row_scaler
+            W_metric = torch.abs((W - W.mean())/W.std()) * row_scaler
+            #W_metric = torch.abs(W/torch.norm(W, p=2, dim=1, keepdim=True)) * row_scaler
             '''
                         # Handle dimension matching
             if W.dim() == 2:  # Standard weight matrix
@@ -277,6 +278,7 @@ def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
                             o_max = score
                         elif score < o_min:
                             o_min = score
+
             else:
                 info = {
                             "name": f"block.{i}.{name}",
@@ -323,7 +325,7 @@ def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
     v_matrix_scores.clear()
     o_matrix_scores.clear()   
 
-
+    
     global_matrix_scores.sort(key=lambda x: x["score"], reverse=True)
     # Determine number to keep
     num_total = len(global_matrix_scores)
@@ -350,4 +352,5 @@ def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
 
     global_matrix_scores.extend(mlps)
     global_matrix_scores.extend([{"name" : "embed", "mask" : 1}, {"name" : "unembed", "mask" : 1}])
+
     return global_matrix_scores

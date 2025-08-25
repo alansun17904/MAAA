@@ -97,10 +97,10 @@ def prepare_calibration_input_tlens(model: HookedTransformer, dataloader, corrda
 
 def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
     print("loading calibdation data")
-    dataloader, _, corrdataloader, _ = get_loaders("ioi",nsamples=args.nsamples,seed=args.seed,seqlen=25, model=model)
+    dataloader, _, corrdataloader, _ = get_loaders("ioi", nsamples=args.prune_nsamples, seed=args.prune_seed, seqlen=25, model=model)
     print("dataset loading complete")
 
-    inps, outs, all_tokens, all_corr_tokens = prepare_calibration_input_tlens(model, dataloader, corrdataloader, seqlen=25, max_samples=args.nsamples, device = device)
+    inps, outs, all_tokens, all_corr_tokens = prepare_calibration_input_tlens(model, dataloader, corrdataloader, seqlen=25, max_samples=args.prune_nsamples, device = device)
 
     inps, outs, all_tokens, all_corr_tokens = inps.to(device), outs.to(device), all_tokens.to(device), all_corr_tokens.to(device)
 
@@ -158,7 +158,7 @@ def prune_wanda(args, model, device=torch.device("cuda:0"), sparsity=0):
             f"blocks.{i}.attn.hook_z",         # Input to O matrix
             f"blocks.{i}.mlp.hook_post",       # Output of MLP (for out matrix)
         ]
-        for j in range(args.nsamples):            
+        for j in range(args.prune_nsamples):            
             with torch.no_grad():
                 _, cache = model.run_with_cache(all_tokens[j], names_filter=hook_points) #Has to be in here cuz too much memory outside of loop
                 _, corrcache = model.run_with_cache(all_corr_tokens[j], names_filter=hook_points)

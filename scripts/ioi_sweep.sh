@@ -57,9 +57,9 @@ WANDB_WATCH=all WANDB_PROJECT=MAAA_CD_MEZO WANDB_MODE=online python src/main_ioi
     --save_steps 64 \
     --logging_steps 8 \
     --save_total_limit 1 \
-    --start_edge_sparsity 0.00 \
+    --start_edge_sparsity $PRUNE_SPARSITY \
     --target_edge_sparsity $EDGE_SPARSITY \
-    --start_layer_sparsity 0.00 \
+    --start_layer_sparsity $NODE_SPARSITY \
     --target_layer_sparsity $NODE_SPARSITY \
     --num_sparsity_warmup_steps $WARMUP \
     --max_train_samples $N_TRAIN \

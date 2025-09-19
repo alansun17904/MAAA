@@ -70,7 +70,7 @@ sys.path.append(
 )   # Very hacky but the imports are annoying otherwise
 from modeling_fpt2 import FPT2LMHeadModel
 sys.path.append(os.path.join(os.getcwd(), "src/layer1/soft_edge_mask"))
-from label_smoothing_utils import load_mask, compute_z_star, compute_edge_scores
+from label_smoothing_utils import load_mask, compute_edge_scores
 
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
@@ -279,6 +279,11 @@ class DataTrainingArguments:
     initial_mask_path: Optional[str] = field(
         default=None,
         metadata={"help": "Path to the initial Wanda pruning mask for label smoothing."},
+    )
+    # New arguments for the dictionary logic
+    initial_scores_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to JSON with FINAL edge scores: writer → {reader: score in [0,1]}. Overrides mask/alpha."},
     )
     with_embedding_nodes: Optional[bool] = field(
         default=False,
@@ -510,6 +515,13 @@ def get_optimizers(model, edges_lr, layers_lr, reg_edges_lr, reg_layers_lr, num_
 
     return optimizer, scheduler
 
+# New helper function for dictionary
+def load_scores_dict(file_path: str) -> dict:
+    """Loads a dictionary from a JSON file."""
+    with open(file_path, 'r') as f:
+        scores_dict = json.load(f)
+    return scores_dict
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -579,11 +591,15 @@ def main():
     n_train = len(raw_datasets["train"])
 
     initial_scores = None
-    if data_args.label_smoothing_alpha is not None and data_args.initial_mask_path is not None:
-        print("Applying label smoothing initialization...")
-        initial_mask = load_mask(data_args.initial_mask_path)
-        z_star = compute_z_star(initial_mask, alpha=data_args.label_smoothing_alpha)
-        initial_scores = compute_edge_scores(z_star)
+    # New dictionary logic
+    if data_args.initial_scores_path is not None:
+        print("Loading initial EDGE scores (writer→reader) from file...")
+        initial_scores = load_scores_dict(data_args.initial_scores_path)
+        # Optional sanity checks:
+        if isinstance(initial_scores, dict) and initial_scores:
+            w = next(iter(initial_scores))
+            assert isinstance(initial_scores[w], dict), \
+                "Expected edge scores mapping: writer → {reader: float in [0,1]}"
     
     model = FPT2LMHeadModel.from_pretrained(
         model_args.initialize_from,
